@@ -1,0 +1,81 @@
+# sibei-flow V1 — one `docker compose up` brings up the whole spine:
+# postgres (source of truth) + brain (Rust) + worker (Python).
+# ADR-0009 / R1.1 / V1-plan §"Packaging".
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: sibei
+      POSTGRES_PASSWORD: sibei
+      POSTGRES_DB: sibei
+    ports:
+      # Host 5455 → container 5432 (avoids clashes with other local Postgres instances).
+      - "5455:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sibei -d sibei"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  brain:
+    build:
+      context: ./brain
+    environment:
+      DATABASE_URL: postgres://sibei:sibei@postgres:5432/sibei
+      BIND_ADDR: 0.0.0.0:8080
+      RUST_LOG: info,brain=info,sqlx=warn
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # V2: fixture warehouse (post-rename upstream) for get_schema drift detection.
+  warehouse:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: sibei
+      POSTGRES_PASSWORD: sibei
+      POSTGRES_DB: warehouse
+    ports:
+      # Host 5456 → container 5432 (avoids clashes with other local Postgres).
+      - "5456:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sibei -d warehouse"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - whdata:/var/lib/postgresql/data
+      - ./db/warehouse/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+
+  worker:
+    build:
+      context: ./worker
+    environment:
+      DATABASE_URL: postgres://sibei:sibei@postgres:5432/sibei
+      LEASE_SECONDS: "60"
+      POLL_INTERVAL: "2.0"
+      # V2 agent loop config
+      WAREHOUSE_URL: postgres://sbflow_ro:sbflow_ro@warehouse:5432/warehouse
+      REPO_ROOT: /repo
+      LLM_PROVIDER: replay
+      LLM_MODEL: claude-opus-4-8
+      MAX_TURNS: "6"
+    volumes:
+      # Read-only checkout the agent reads failing source from (N7).
+      - ./fixtures/dbt_project:/repo:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      warehouse:
+        condition: service_healthy
+      brain:
+        condition: service_started
+
+volumes:
+  pgdata:
+  whdata:

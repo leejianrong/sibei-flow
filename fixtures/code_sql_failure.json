@@ -1,0 +1,9 @@
+{
+  "repo": "acme/analytics",
+  "run_id": "manual__2026-07-09T04:00:00+00:00",
+  "task_id": "dbt_build_revenue",
+  "node_uid": "model.analytics.revenue",
+  "error_text": "Database Error in model revenue (models/marts/revenue.sql)\n  syntax error at or near \"selct\"",
+  "adapter": "postgres",
+  "source": "dbt"
+}

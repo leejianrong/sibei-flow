@@ -1,0 +1,14 @@
+version: 2
+
+sources:
+  - name: raw
+    schema: raw
+    tables:
+      - name: raw_customers
+
+models:
+  - name: orders
+    description: "Orders enriched with customer info (fixture)."
+    columns:
+      - name: customer_id
+        description: "Drifted upstream to cust_id — the demo failure."

@@ -1,0 +1,22 @@
+{
+  "metadata": { "project_name": "analytics", "note": "minimal fixture manifest for V2" },
+  "nodes": {
+    "model.analytics.orders": {
+      "unique_id": "model.analytics.orders",
+      "name": "orders",
+      "resource_type": "model",
+      "original_file_path": "models/marts/orders.sql",
+      "config": { "materialized": "view" },
+      "depends_on": { "nodes": ["source.analytics.raw.raw_customers"] }
+    }
+  },
+  "sources": {
+    "source.analytics.raw.raw_customers": {
+      "unique_id": "source.analytics.raw.raw_customers",
+      "source_name": "raw",
+      "name": "raw_customers",
+      "schema": "raw",
+      "identifier": "raw_customers"
+    }
+  }
+}

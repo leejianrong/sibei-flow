@@ -1,0 +1,10 @@
+{
+  "repo": "acme/analytics",
+  "run_id": "manual__2026-07-09T02:00:00+00:00",
+  "task_id": "dbt_build_orders",
+  "node_uid": "model.analytics.orders",
+  "error_text": "Database Error in model orders (models/marts/orders.sql)\n  column \"customer_id\" does not exist\n  LINE 12:   select customer_id, order_ts, amount",
+  "adapter": "postgres",
+  "run_results_ref": "target/run_results.json",
+  "source": "airflow"
+}

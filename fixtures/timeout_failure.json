@@ -1,0 +1,9 @@
+{
+  "repo": "acme/analytics",
+  "run_id": "manual__2026-07-09T03:00:00+00:00",
+  "task_id": "dbt_build_big_agg",
+  "node_uid": "model.analytics.big_agg",
+  "error_text": "canceling statement due to statement timeout",
+  "adapter": "postgres",
+  "source": "dbt"
+}

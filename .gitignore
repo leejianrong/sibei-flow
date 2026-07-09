@@ -11,3 +11,17 @@
 .env
 .env.*
 !.env.example
+
+# Rust build output (scoped to the brain crate so it does not swallow the
+# bundled dbt fixture at fixtures/dbt_project/target/)
+/brain/target/
+
+# Python / uv
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+
+# Lockfiles (worker/uv.lock, brain/Cargo.lock) are intentionally committed for
+# reproducible builds — do not ignore them.
