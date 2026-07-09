@@ -1,0 +1,26 @@
+{
+  "_note": "Recorded flagship session: upstream rename customer_id -> cust_id. Drives the V2 demo and Seam-1 rename test deterministically without an LLM key. Tool RESULTS are produced by really running read_file/get_schema/edit_file.",
+  "turns": [
+    {
+      "text": "The model failed referencing a column that no longer exists upstream. Let me read the failing model.",
+      "tool_calls": [
+        { "name": "read_file", "input": { "path": "models/marts/orders.sql", "ref": "HEAD" } }
+      ]
+    },
+    {
+      "text": "It selects customer_id from raw_customers. Let me check the current upstream columns to confirm the drift.",
+      "tool_calls": [
+        { "name": "get_schema", "input": { "source": "raw.raw_customers" } }
+      ]
+    },
+    {
+      "text": "Confirmed: raw_customers no longer has customer_id; it now exposes cust_id (same type). This is a clean 1:1 rename. Applying the minimal fix.",
+      "tool_calls": [
+        { "name": "edit_file", "input": { "path": "models/marts/orders.sql", "old_string": "customer_id,", "new_string": "cust_id," } }
+      ]
+    },
+    {
+      "text": "Upstream renamed the source column customer_id to cust_id, which broke the orders model's SELECT. I updated the model to reference cust_id instead. The change is a single-column rename on the failing model only; no other files touched."
+    }
+  ]
+}
