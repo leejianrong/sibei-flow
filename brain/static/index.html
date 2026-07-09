@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>sibei-flow — runs</title>
+  <style>
+    :root {
+      --bg: #0f1115; --panel: #171a21; --border: #262b36; --fg: #e6e9ef;
+      --muted: #8b93a3; --accent: #6ea8fe; --ok: #4ec98a; --drop: #b8859b;
+      --warn: #d9a441;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; background: var(--bg); color: var(--fg);
+      font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+    }
+    header {
+      padding: 18px 24px; border-bottom: 1px solid var(--border);
+      display: flex; align-items: baseline; gap: 12px;
+    }
+    header h1 { font-size: 16px; margin: 0; font-weight: 650; letter-spacing: .2px; }
+    header .tag {
+      font-size: 11px; color: var(--muted); border: 1px solid var(--border);
+      padding: 2px 8px; border-radius: 999px;
+    }
+    header .ro { color: var(--warn); border-color: var(--warn); }
+    main { padding: 20px 24px; max-width: 1100px; }
+    .hint { color: var(--muted); margin: 0 0 16px; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--border); }
+    th { color: var(--muted); font-weight: 550; font-size: 12px; text-transform: uppercase; letter-spacing: .4px; }
+    tbody tr { cursor: pointer; }
+    tbody tr:hover { background: var(--panel); }
+    code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+    .pill { font-size: 12px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--border); white-space: nowrap; }
+    .pill.no_fix { color: var(--muted); }
+    .pill.out_of_scope { color: var(--drop); border-color: var(--drop); }
+    .pill.queued, .pill.claimed { color: var(--accent); border-color: var(--accent); }
+    .pill.done { color: var(--ok); border-color: var(--ok); }
+    .pill.pr_proposed { color: var(--warn); border-color: var(--warn); }
+    .badge-unverified {
+      display: inline-block; font-size: 11px; font-weight: 600; letter-spacing: .4px;
+      color: var(--warn); border: 1px solid var(--warn); border-radius: 6px;
+      padding: 3px 8px; margin-bottom: 12px; text-transform: uppercase;
+    }
+    .card h3 { margin: 0 0 10px; font-size: 13px; text-transform: uppercase; letter-spacing: .4px; color: var(--muted); }
+    pre.diff .add { color: var(--ok); }
+    pre.diff .del { color: var(--drop); }
+    pre.diff .hd { color: var(--accent); }
+    .drift { color: var(--accent); }
+    .oos { color: var(--drop); }
+    #detail { margin-top: 8px; }
+    .card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 16px 18px; margin-bottom: 14px; }
+    .kv { display: grid; grid-template-columns: 160px 1fr; gap: 6px 14px; }
+    .kv dt { color: var(--muted); }
+    .kv dd { margin: 0; }
+    pre { background: #0b0d11; border: 1px solid var(--border); border-radius: 8px; padding: 12px; overflow-x: auto; font-size: 12px; }
+    a.back { color: var(--accent); text-decoration: none; font-size: 13px; }
+    .empty { color: var(--muted); padding: 24px 0; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>sibei-flow</h1>
+    <span class="tag">run history</span>
+    <span class="tag ro">read-only — approval lives in the PR</span>
+  </header>
+  <main id="app"><p class="empty">Loading…</p></main>
+
+  <script>
+    const app = document.getElementById("app");
+
+    function fmt(ts) { return ts ? new Date(ts).toLocaleString() : "—"; }
+    function esc(s) { return (s == null ? "" : String(s)).replace(/[&<>]/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;" }[c])); }
+    function classCell(c) {
+      if (!c) return "—";
+      if (c.startsWith("out_of_scope")) return `<span class="oos">${esc(c)}</span>`;
+      return `<span class="drift">${esc(c)}</span>`;
+    }
+    function pill(kind, val) { return val ? `<span class="pill ${esc(val)}">${esc(val)}</span>` : "—"; }
+    function renderDiff(diff) {
+      return esc(diff).split("\n").map(l => {
+        if (l.startsWith("+++") || l.startsWith("---") || l.startsWith("@@")) return `<span class="hd">${l}</span>`;
+        if (l.startsWith("+")) return `<span class="add">${l}</span>`;
+        if (l.startsWith("-")) return `<span class="del">${l}</span>`;
+        return l;
+      }).join("\n");
+    }
+
+    async function routeList() {
+      const r = await fetch("/api/runs");
+      const { runs } = await r.json();
+      if (!runs.length) { app.innerHTML = `<p class="empty">No runs yet. POST a failure to <code>/webhook</code>.</p>`; return; }
+      const rows = runs.map(x => `
+        <tr data-id="${x.id}">
+          <td><code>${esc(x.repo || "—")}</code></td>
+          <td>${classCell(x.failure_class)}</td>
+          <td>${pill("state", x.state)}</td>
+          <td>${x.outcome ? pill("outcome", x.outcome) : "—"}</td>
+          <td>${esc(x.task_id || "—")}</td>
+          <td>${fmt(x.created_at)}</td>
+        </tr>`).join("");
+      app.innerHTML = `
+        <p class="hint">Every failure the tool saw and what it did. Click a row for detail.</p>
+        <table>
+          <thead><tr><th>Repo</th><th>Class</th><th>State</th><th>Outcome</th><th>Task</th><th>Seen</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>`;
+      app.querySelectorAll("tr[data-id]").forEach(tr =>
+        tr.addEventListener("click", () => { location.hash = "#/run/" + tr.dataset.id; }));
+    }
+
+    async function routeDetail(id) {
+      const r = await fetch("/api/runs/" + id);
+      if (!r.ok) { app.innerHTML = `<a class="back" href="#/">← back</a><p class="empty">Run not found.</p>`; return; }
+      const d = await r.json();
+      const res = d.result || {};
+
+      let sections = "";
+      // Unverified badge: a drafted fix with no verification evidence yet (V2; V3 adds evidence).
+      if (d.outcome === "pr_proposed" && (res.evidence == null)) {
+        sections += `<div class="badge-unverified">⚠ unverified — no sandbox evidence yet (V3)</div>`;
+      }
+      if (res.explanation) {
+        sections += `<div class="card"><h3>Explanation</h3><div>${esc(res.explanation)}</div></div>`;
+      }
+      if (res.diff) {
+        sections += `<div class="card"><h3>Drafted diff (minimal)</h3><pre class="diff">${renderDiff(res.diff)}</pre></div>`;
+      }
+      if (res.transcript && res.transcript.length) {
+        sections += `<div class="card"><h3>Reasoning transcript</h3><pre>${esc(res.transcript.join("\n"))}</pre></div>`;
+      }
+
+      app.innerHTML = `
+        <a class="back" href="#/">← back to runs</a>
+        <div class="card" style="margin-top:12px">
+          <dl class="kv">
+            <dt>Repo</dt><dd><code>${esc(d.repo)}</code></dd>
+            <dt>Failure class</dt><dd>${classCell(d.failure_class)}</dd>
+            <dt>State</dt><dd>${pill("state", d.state)}</dd>
+            <dt>Outcome</dt><dd>${d.outcome ? pill("outcome", d.outcome) : "—"}</dd>
+            <dt>Task</dt><dd>${esc(d.task_id || "—")}</dd>
+            <dt>Node</dt><dd><code>${esc(d.node_uid || "—")}</code></dd>
+            <dt>Run id</dt><dd><code>${esc(d.run_id || "—")}</code></dd>
+            <dt>Created</dt><dd>${fmt(d.created_at)}</dd>
+            <dt>Updated</dt><dd>${fmt(d.updated_at)}</dd>
+            <dt>Lease expires</dt><dd>${fmt(d.lease_expires_at)}</dd>
+          </dl>
+        </div>
+        ${sections}
+        <div class="card">
+          <h3>Normalized failure payload</h3>
+          <pre>${esc(JSON.stringify(d.payload, null, 2))}</pre>
+        </div>`;
+    }
+
+    function render() {
+      const m = location.hash.match(/^#\/run\/([0-9a-f-]+)/i);
+      if (m) routeDetail(m[1]); else routeList();
+    }
+    window.addEventListener("hashchange", render);
+    render();
+  </script>
+</body>
+</html>
