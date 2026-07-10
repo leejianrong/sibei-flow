@@ -87,6 +87,27 @@ GET /  ·  GET /api/runs  ·  GET /api/runs/:id     read-only dashboard (no writ
   run against a real model, set `LLM_PROVIDER=claude` + `ANTHROPIC_API_KEY`
   (or `LLM_PROVIDER=openai` + `LLM_BASE_URL` for a local model).
 
+## Common tasks (`make`)
+
+A root `Makefile` wraps the repeated docker/compose/test invocations:
+
+```bash
+make up            # bring the whole stack up (build if needed)
+make demo          # drive the end-to-end demo
+make test          # both suites (brain + worker, incl. real-Docker sandbox tests)
+make down / clean  # stop the stack (clean also drops volumes)
+make logs-worker   # tail worker logs ·  make psql / psql-warehouse
+```
+`make help` lists everything. Test targets run in throwaway containers on the
+compose network, so no local Rust/uv toolchain is needed; `make test-worker`
+runs inside the worker image (which ships the docker CLI) so the sandbox tests
+execute rather than skip.
+
+> ⚠️ The warehouse's tier-2 dev role (`sbflow_dev`) is seeded by an init script
+> that only runs on a **fresh** volume. If you pulled after V3 landed, run
+> `make clean` once before `make up` (or `docker compose down -v`), or tier-2
+> `dbt build` will fail with a missing-role error.
+
 ## Run the demo
 
 ```bash
