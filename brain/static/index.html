@@ -44,6 +44,34 @@
       color: var(--warn); border: 1px solid var(--warn); border-radius: 6px;
       padding: 3px 8px; margin-bottom: 12px; text-transform: uppercase;
     }
+    .badge-verified {
+      display: inline-block; font-size: 11px; font-weight: 600; letter-spacing: .4px;
+      color: var(--ok); border: 1px solid var(--ok); border-radius: 6px;
+      padding: 3px 8px; margin-bottom: 12px; text-transform: uppercase;
+    }
+    .badge-suppressed {
+      display: inline-block; font-size: 11px; font-weight: 600; letter-spacing: .4px;
+      color: var(--drop); border: 1px solid var(--drop); border-radius: 6px;
+      padding: 3px 8px; margin-bottom: 12px; text-transform: uppercase;
+    }
+    .evidence { list-style: none; margin: 0; padding: 0; }
+    .evidence li { padding: 5px 0; display: flex; align-items: baseline; gap: 10px; }
+    .evidence .mark { font-weight: 700; width: 16px; display: inline-block; }
+    .evidence .pass { color: var(--ok); }
+    .evidence .fail { color: var(--drop); }
+    .evidence .na { color: var(--muted); }
+    .evidence .detail { color: var(--muted); font-size: 12px; }
+    .risk { font-size: 12px; padding: 2px 10px; border-radius: 999px; border: 1px solid var(--border); text-transform: uppercase; letter-spacing: .4px; font-weight: 600; }
+    .risk.low { color: var(--ok); border-color: var(--ok); }
+    .risk.medium { color: var(--warn); border-color: var(--warn); }
+    .risk.high { color: var(--drop); border-color: var(--drop); }
+    .confbar { height: 8px; border-radius: 999px; background: #0b0d11; border: 1px solid var(--border); overflow: hidden; margin: 8px 0; }
+    .confbar > span { display: block; height: 100%; background: var(--ok); }
+    .factors { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+    .factors .f { font-size: 11px; color: var(--muted); border: 1px solid var(--border); border-radius: 6px; padding: 2px 7px; }
+    .conf-head { display: flex; align-items: center; gap: 12px; }
+    .conf-head .num { font-size: 20px; font-weight: 650; }
+    details.log summary { cursor: pointer; color: var(--muted); font-size: 12px; }
     .card h3 { margin: 0 0 10px; font-size: 13px; text-transform: uppercase; letter-spacing: .4px; color: var(--muted); }
     pre.diff .add { color: var(--ok); }
     pre.diff .del { color: var(--drop); }
@@ -79,6 +107,47 @@
       return `<span class="drift">${esc(c)}</span>`;
     }
     function pill(kind, val) { return val ? `<span class="pill ${esc(val)}">${esc(val)}</span>` : "—"; }
+    function evRow(label, state, detail, log) {
+      // state: "pass" | "fail" | "na"
+      const mark = state === "pass" ? "✓" : state === "fail" ? "✗" : "—";
+      const logHtml = log
+        ? `<details class="log"><summary>log</summary><pre>${esc(log)}</pre></details>`
+        : "";
+      return `<li><span class="mark ${state}">${mark}</span>
+        <span>${label}${detail ? ` <span class="detail">— ${esc(detail)}</span>` : ""}</span>
+        ${logHtml}</li>`;
+    }
+    function renderEvidence(ev) {
+      const t1 = ev.tier1 || {}, t2 = ev.tier2 || {}, os = ev.output_schema || {};
+      const rows = [];
+      rows.push(evRow(
+        "compiled (dbt compile)",
+        t1.passed ? "pass" : "fail",
+        null, t1.log));
+      if (t2.ran) {
+        rows.push(evRow("ran on sample (dbt build)", t2.passed ? "pass" : "fail", null, t2.log));
+      } else {
+        rows.push(evRow("sample run", "na", "not configured", null));
+      }
+      const osState = os.changed === false ? "pass" : os.changed === true ? "fail" : "na";
+      rows.push(evRow(
+        os.changed === false ? "output schema unchanged"
+          : os.changed === true ? "output schema changed" : "output schema",
+        osState, os.detail, null));
+      return `<ul class="evidence">${rows.join("")}</ul>`;
+    }
+    function renderConfidence(res) {
+      const pct = res.confidence != null ? Math.round(res.confidence * 100) : null;
+      const risk = res.risk_class ? `<span class="risk ${esc(res.risk_class)}">risk: ${esc(res.risk_class)}</span>` : "";
+      let html = `<div class="conf-head">`;
+      if (pct != null) html += `<span class="num">${pct}%</span><span class="detail">confidence</span>`;
+      html += ` ${risk}</div>`;
+      if (pct != null) html += `<div class="confbar"><span style="width:${pct}%"></span></div>`;
+      if (res.factors && res.factors.length) {
+        html += `<div class="factors">${res.factors.map(f => `<span class="f">${esc(f)}</span>`).join("")}</div>`;
+      }
+      return html;
+    }
     function renderDiff(diff) {
       return esc(diff).split("\n").map(l => {
         if (l.startsWith("+++") || l.startsWith("---") || l.startsWith("@@")) return `<span class="hd">${l}</span>`;
@@ -118,12 +187,28 @@
       const res = d.result || {};
 
       let sections = "";
-      // Unverified badge: a drafted fix with no verification evidence yet (V2; V3 adds evidence).
-      if (d.outcome === "pr_proposed" && (res.evidence == null)) {
-        sections += `<div class="badge-unverified">⚠ unverified — no sandbox evidence yet (V3)</div>`;
+      const ev = res.evidence;
+      // Status badge reflects REAL evidence (V3): verified when tier-1 passed;
+      // suppressed when a non-compiling draft was gated to no_fix; unverified
+      // only when no sandbox ran at all (legacy V2 shape).
+      if (ev == null && d.outcome === "pr_proposed") {
+        sections += `<div class="badge-unverified">⚠ unverified — no sandbox evidence</div>`;
+      } else if (ev != null && d.outcome === "no_fix") {
+        sections += `<div class="badge-suppressed">suppressed — draft did not pass the compile gate</div>`;
+      } else if (ev != null && ev.tier1 && ev.tier1.passed) {
+        const label = (ev.tier2 && ev.tier2.ran && ev.tier2.passed)
+          ? "✓ verified — compiled &amp; ran on sample"
+          : "✓ verified — compiled (sample not run)";
+        sections += `<div class="badge-verified">${label}</div>`;
       }
       if (res.explanation) {
         sections += `<div class="card"><h3>Explanation</h3><div>${esc(res.explanation)}</div></div>`;
+      }
+      if (ev) {
+        sections += `<div class="card"><h3>Verification evidence</h3>${renderEvidence(ev)}</div>`;
+      }
+      if (res.confidence != null || res.risk_class) {
+        sections += `<div class="card"><h3>Confidence &amp; risk</h3>${renderConfidence(res)}</div>`;
       }
       if (res.diff) {
         sections += `<div class="card"><h3>Drafted diff (minimal)</h3><pre class="diff">${renderDiff(res.diff)}</pre></div>`;

@@ -43,6 +43,25 @@ class Config:
     #: Diff guard: reject an edit whose file diff exceeds this many lines (B-S5).
     diff_max_lines: int
 
+    # --- V3: tiered verification sandbox (ADR-0006, B-S2) ------------------
+    #: Pre-baked sandbox image (python + dbt-core + dbt-postgres + git).
+    sandbox_image: str
+    #: Docker network the sandbox joins to reach the warehouse (compose default).
+    sandbox_network: str | None
+    #: Host-visible working root the sandbox project is materialized under. Must
+    #: be bind-mounted into the worker at the SAME path so `docker run -v` paths
+    #: resolve on the host daemon (Docker-out-of-Docker).
+    sandbox_work_dir: str
+    #: Hard timeout (seconds) on any single sandbox `docker run`.
+    sandbox_timeout: int
+    #: Writable read-only *dev/sample* connection for tier-2 `dbt build`. When
+    #: unset, tier-2 does not run and its absence is disclosed (never prod).
+    sample_warehouse_url: str | None
+    #: Row cap passed to tier-2 as a dbt var (a real project gates on it).
+    sample_limit: int
+    #: Enable the sandbox at all. Off keeps the V2 behaviour (evidence=null).
+    sandbox_enabled: bool
+
     @staticmethod
     def from_env() -> "Config":
         return Config(
@@ -59,4 +78,11 @@ class Config:
             replay_session=os.environ.get("REPLAY_SESSION", _DEFAULT_REPLAY),
             max_turns=int(os.environ.get("MAX_TURNS", "6")),
             diff_max_lines=int(os.environ.get("DIFF_MAX_LINES", "40")),
+            sandbox_image=os.environ.get("SANDBOX_IMAGE", "sbflow-sandbox:latest"),
+            sandbox_network=os.environ.get("SANDBOX_NETWORK") or None,
+            sandbox_work_dir=os.environ.get("SANDBOX_WORK_DIR", "/tmp/sbflow-sandbox"),
+            sandbox_timeout=int(os.environ.get("SANDBOX_TIMEOUT", "120")),
+            sample_warehouse_url=os.environ.get("SAMPLE_WAREHOUSE_URL") or None,
+            sample_limit=int(os.environ.get("SAMPLE_LIMIT", "10000")),
+            sandbox_enabled=os.environ.get("SANDBOX_ENABLED", "1") not in ("0", "", "false"),
         )

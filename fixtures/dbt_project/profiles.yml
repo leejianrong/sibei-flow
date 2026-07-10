@@ -1,0 +1,32 @@
+# Reference profile for the fixture project (V3).
+#
+# NOTE: the verification sandbox GENERATES its own profiles.yml at run time from
+# the worker's WAREHOUSE_URL / SAMPLE_WAREHOUSE_URL (see sbflow_worker/sandbox/
+# runner.py) and mounts it at /profiles, so this file is *not* what the sandbox
+# uses. It is here so a human can run dbt against the fixture by hand:
+#
+#   compile : read-only connection (tier-1 `dbt compile`)
+#   sample  : writable dev/sample connection (tier-2 `dbt build`), never prod
+#
+# Defaults match docker-compose; override via env vars for a manual local run.
+analytics:
+  target: compile
+  outputs:
+    compile:
+      type: postgres
+      host: "{{ env_var('SBFLOW_WH_HOST', 'warehouse') }}"
+      port: "{{ env_var('SBFLOW_WH_PORT', '5432') | as_number }}"
+      user: "{{ env_var('SBFLOW_WH_USER', 'sbflow_ro') }}"
+      password: "{{ env_var('SBFLOW_WH_PASS', 'sbflow_ro') }}"
+      dbname: "{{ env_var('SBFLOW_WH_DB', 'warehouse') }}"
+      schema: sbflow_verify
+      threads: 1
+    sample:
+      type: postgres
+      host: "{{ env_var('SBFLOW_WH_HOST', 'warehouse') }}"
+      port: "{{ env_var('SBFLOW_WH_PORT', '5432') | as_number }}"
+      user: "{{ env_var('SBFLOW_SAMPLE_USER', 'sbflow_dev') }}"
+      password: "{{ env_var('SBFLOW_SAMPLE_PASS', 'sbflow_dev') }}"
+      dbname: "{{ env_var('SBFLOW_WH_DB', 'warehouse') }}"
+      schema: sbflow_sample
+      threads: 1

@@ -36,12 +36,30 @@ def build_processor(cfg: Config) -> Callable[[dict[str, Any]], dict[str, Any]]:
             allowed_edit_paths(cfg.repo_root, failing_file) if failing_file else set()
         )
 
+        sandbox = None
+        if cfg.sandbox_enabled:
+            from ..sandbox.runner import SandboxRunner
+
+            sandbox = SandboxRunner(
+                repo_root=cfg.repo_root,
+                image=cfg.sandbox_image,
+                warehouse_url=cfg.warehouse_url,
+                sample_url=cfg.sample_warehouse_url,
+                network=cfg.sandbox_network,
+                work_dir=cfg.sandbox_work_dir,
+                timeout=cfg.sandbox_timeout,
+                sample_limit=cfg.sample_limit,
+            )
+        model_select = node_uid.split(".")[-1] if node_uid else None
+
         ctx = AgentContext(
             source=source,
             warehouse=warehouse,
             working=WorkingCopy(),
             guard=DiffGuard(max_lines=cfg.diff_max_lines),
             allowed_paths=allowed,
+            sandbox=sandbox,
+            model_select=model_select,
         )
         task = {
             "repo": payload.get("repo"),

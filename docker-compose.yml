@@ -54,7 +54,10 @@ services:
 
   worker:
     build:
-      context: ./worker
+      # Context is the repo root so the image can ship ./sandbox for lazy image
+      # pre-bake; the worker Dockerfile lives under ./worker.
+      context: .
+      dockerfile: worker/Dockerfile
     environment:
       DATABASE_URL: postgres://sibei:sibei@postgres:5432/sibei
       LEASE_SECONDS: "60"
@@ -65,9 +68,23 @@ services:
       LLM_PROVIDER: replay
       LLM_MODEL: claude-opus-4-8
       MAX_TURNS: "6"
+      # V3 tiered verification sandbox (ADR-0006, B-S2).
+      SANDBOX_IMAGE: sbflow-sandbox:latest
+      SANDBOX_NETWORK: sibei-flow_default        # reach the warehouse from the sandbox
+      SANDBOX_WORK_DIR: /tmp/sbflow-sandbox       # bind-mounted at the same host path
+      SANDBOX_TIMEOUT: "120"
+      # Tier-2: writable read-only DEV/SAMPLE connection (never prod). Comment
+      # this out to demo the honest "sample run: not configured" disclosure.
+      SAMPLE_WAREHOUSE_URL: postgres://sbflow_dev:sbflow_dev@warehouse:5432/warehouse
+      SAMPLE_LIMIT: "10000"
     volumes:
       # Read-only checkout the agent reads failing source from (N7).
       - ./fixtures/dbt_project:/repo:ro
+      # Docker-out-of-Docker: launch ephemeral sandbox containers on the host
+      # daemon. The work dir is bind-mounted at the SAME absolute path so
+      # `docker run -v <hostpath>:/project` resolves on the daemon.
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /tmp/sbflow-sandbox:/tmp/sbflow-sandbox
     depends_on:
       postgres:
         condition: service_healthy

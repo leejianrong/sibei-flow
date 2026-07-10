@@ -33,3 +33,22 @@ GRANT CONNECT ON DATABASE warehouse TO sbflow_ro;
 GRANT USAGE ON SCHEMA raw, information_schema TO sbflow_ro;
 GRANT SELECT ON ALL TABLES IN SCHEMA raw TO sbflow_ro;
 ALTER DEFAULT PRIVILEGES IN SCHEMA raw GRANT SELECT ON TABLES TO sbflow_ro;
+
+-- V3 tier-2: a writable DEV/SAMPLE role. It can build models into its OWN
+-- sample schema (sbflow_sample) and READ raw, but has NO write access to raw or
+-- any prod-shaped table. This models the "read-only dev/sample connection,
+-- never prod" that tier-2 `dbt build` targets (ADR-0006 / B-S2).
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'sbflow_dev') THEN
+        CREATE ROLE sbflow_dev LOGIN PASSWORD 'sbflow_dev';
+    END IF;
+END
+$$;
+
+GRANT CONNECT ON DATABASE warehouse TO sbflow_dev;
+GRANT CREATE ON DATABASE warehouse TO sbflow_dev;         -- create its sample schema
+GRANT USAGE ON SCHEMA raw, information_schema TO sbflow_dev;
+GRANT SELECT ON ALL TABLES IN SCHEMA raw TO sbflow_dev;   -- read the source (never write)
+ALTER DEFAULT PRIVILEGES IN SCHEMA raw GRANT SELECT ON TABLES TO sbflow_dev;
+CREATE SCHEMA IF NOT EXISTS sbflow_sample AUTHORIZATION sbflow_dev;

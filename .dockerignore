@@ -1,0 +1,10 @@
+# Keeps the worker build context (repo root) lean. Only worker/ and sandbox/ are
+# COPYed by worker/Dockerfile; everything else is noise sent to the daemon.
+.git
+brain/target
+worker/.venv
+**/__pycache__
+**/*.pyc
+docs
+site
+fixtures/dbt_project/target

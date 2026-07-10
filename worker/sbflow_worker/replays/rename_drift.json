@@ -1,5 +1,5 @@
 {
-  "_note": "Recorded flagship session: upstream rename customer_id -> cust_id. Drives the V2 demo and Seam-1 rename test deterministically without an LLM key. Tool RESULTS are produced by really running read_file/get_schema/edit_file.",
+  "_note": "Recorded flagship session: upstream rename customer_id -> cust_id. Drives the demo and Seam-1 rename test deterministically without an LLM key. Tool RESULTS are produced by really running read_file/get_schema/edit_file/run_sandbox. The fix aliases cust_id back to customer_id so the model's OUTPUT contract is preserved (downstream keeps working; output schema unchanged).",
   "turns": [
     {
       "text": "The model failed referencing a column that no longer exists upstream. Let me read the failing model.",
@@ -14,13 +14,19 @@
       ]
     },
     {
-      "text": "Confirmed: raw_customers no longer has customer_id; it now exposes cust_id (same type). This is a clean 1:1 rename. Applying the minimal fix.",
+      "text": "Confirmed: raw_customers no longer has customer_id; it now exposes cust_id (same type). This is a clean 1:1 rename. I'll alias cust_id back to customer_id so the model's output contract is unchanged.",
       "tool_calls": [
-        { "name": "edit_file", "input": { "path": "models/marts/orders.sql", "old_string": "customer_id,", "new_string": "cust_id," } }
+        { "name": "edit_file", "input": { "path": "models/marts/orders.sql", "old_string": "customer_id,", "new_string": "cust_id as customer_id," } }
       ]
     },
     {
-      "text": "Upstream renamed the source column customer_id to cust_id, which broke the orders model's SELECT. I updated the model to reference cust_id instead. The change is a single-column rename on the failing model only; no other files touched."
+      "text": "Now verify the candidate fix in the sandbox before proposing it.",
+      "tool_calls": [
+        { "name": "run_sandbox", "input": { "select": "orders" } }
+      ]
+    },
+    {
+      "text": "Upstream renamed the source column customer_id to cust_id, which broke the orders model's SELECT. I aliased cust_id back to customer_id so the model compiles, builds on the sample, and keeps its output schema unchanged. The change is a single-column rename on the failing model only; no other files touched."
     }
   ]
 }

@@ -31,10 +31,26 @@ def wait_for_schema(conn: psycopg.Connection, attempts: int = 60, delay: float =
     raise RuntimeError("repair_jobs table never appeared")
 
 
+def _prewarm_sandbox(cfg: Config) -> None:
+    """Pre-bake the verification image so the first job isn't a build (B-S6)."""
+    from .sandbox.runner import SandboxError, SandboxRunner
+
+    runner = SandboxRunner(repo_root=cfg.repo_root, image=cfg.sandbox_image)
+    try:
+        print("[worker] ensuring sandbox image is pre-baked…", flush=True)
+        runner.ensure_image()
+        print(f"[worker] sandbox image ready: {cfg.sandbox_image}", flush=True)
+    except SandboxError as e:
+        print(f"[worker] WARNING: sandbox image not ready ({e}); "
+              "jobs will fail verification until it is available", flush=True)
+
+
 def main() -> None:
     cfg = Config.from_env()
     conn = connect_with_retry(cfg.database_url)
     wait_for_schema(conn)
+    if cfg.sandbox_enabled:
+        _prewarm_sandbox(cfg)
     process = build_processor(cfg)
     print(
         f"[worker] started; provider={cfg.llm_provider} model={cfg.llm_model} "

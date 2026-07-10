@@ -30,24 +30,32 @@ curl -fsS -X POST "${BRAIN}/webhook" \
   --data @"${ROOT}/fixtures/timeout_failure.json"
 echo
 
-say "Give the worker a moment to claim + run the agent loop"
-sleep 6
+say "Give the worker a moment to claim + run the agent loop + verify in the sandbox"
+sleep 20
 
 say "GET /api/runs  (run history)"
 curl -fsS "${BRAIN}/api/runs" | python3 -m json.tool
 
-say "GET /api/runs/${DRIFT_ID}  (the drafted fix — diff + explanation, unverified)"
+say "GET /api/runs/${DRIFT_ID}  (the drafted fix — diff + explanation + VERIFICATION EVIDENCE)"
 curl -fsS "${BRAIN}/api/runs/${DRIFT_ID}" | python3 -c '
 import sys, json
 d = json.load(sys.stdin)
 r = d.get("result") or {}
-print("outcome :", d.get("outcome"))
-print("evidence:", r.get("evidence"), "(null => unverified until V3)")
+ev = r.get("evidence") or {}
+t1, t2, os_ = ev.get("tier1", {}), ev.get("tier2", {}), ev.get("output_schema", {})
+print("outcome    :", d.get("outcome"))
+print("compiled   :", "PASS" if t1.get("passed") else "FAIL", "(tier-1, always runs)")
+print("sample     :", ("PASS" if t2.get("passed") else "FAIL") if t2.get("ran") else "not configured", "(tier-2)")
+print("out schema :", "unchanged" if os_.get("changed") is False else os_.get("detail"))
+print("confidence :", r.get("confidence"), " risk:", r.get("risk_class"))
+print("factors    :", ", ".join(r.get("factors") or []))
 print("explanation:", (r.get("explanation") or "")[:200])
 print("--- diff ---")
 print(r.get("diff") or "(none)")'
 
 say "Open the dashboard UI:  ${BRAIN}/"
 echo "Expected: the schema-drift run shows outcome=pr_proposed with a minimal"
-echo "          customer_id -> cust_id diff, marked UNVERIFIED; the timeout run"
-echo "          shows outcome=out_of_scope (never queued)."
+echo "          cust_id -> customer_id alias diff, marked VERIFIED (compiled + sample +"
+echo "          output schema unchanged) with a confidence + risk:low label; the timeout"
+echo "          run shows outcome=out_of_scope (never queued)."
+echo "A non-compiling draft would instead be suppressed to no_fix (never proposed)."

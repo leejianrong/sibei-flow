@@ -70,7 +70,8 @@ def test_rename_drift_produces_minimal_unverified_diff():
     assert result["outcome"] == "pr_proposed"
     diff = result["diff"]
     assert "-    customer_id," in diff
-    assert "+    cust_id," in diff
+    # The fix aliases cust_id back to customer_id (preserves the output contract).
+    assert "+    cust_id as customer_id," in diff
     # Minimal: only the failing model, only the one column line.
     assert diff.count("\n+") <= 3 and MODEL in diff
     # Explanation names the drift; transcript present; unverified (no evidence).
