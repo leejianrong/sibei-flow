@@ -1,0 +1,729 @@
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>sibei-flow — self-healing data pipelines</title>
+<meta name="description" content="When your dbt-in-Airflow pipeline breaks from schema drift or a SQL error, sibei-flow diagnoses it, verifies a fix in a sandbox, and opens a reviewable pull request — while you sleep. Open source, Apache-2.0." />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet" />
+
+<style>
+  /* ============================================================
+     sibei-flow landing page
+     Type:  Space Grotesk (display/body) + Space Mono (labels/code)
+     Color: navy ink base; emerald = verified/healed; ember/red = broken
+     ============================================================ */
+
+  :root {
+    --ink:        #0c1117;
+    --ink-2:      #0f1620;
+    --panel:      #131b26;
+    --panel-2:    #17212e;
+    --line:       #222f3d;
+    --line-soft:  #1b2634;
+    --text:       #e8eef4;
+    --text-mut:   #93a2b2;
+    --text-dim:   #6b7a8b;
+
+    --green:      #3fb27f;
+    --green-ink:  #7fe0b0;
+    --green-bg:   rgba(63,178,127,0.12);
+    --amber:      #ef8e4b;
+    --amber-ink:  #f4a86e;
+    --amber-bg:   rgba(239,142,75,0.13);
+    --red:        #f2555a;
+    --red-bg:     rgba(242,85,90,0.12);
+    --brand:      #6fb6ff;
+
+    --shadow:     0 24px 60px -28px rgba(0,0,0,0.7);
+
+    --mono: "Space Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+    --sans: "Space Grotesk", system-ui, -apple-system, "Segoe UI", sans-serif;
+
+    --maxw: 1120px;
+    color-scheme: dark;
+  }
+
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) {
+      --ink:        #f4f6f9;
+      --ink-2:      #eef1f6;
+      --panel:      #ffffff;
+      --panel-2:    #f7f9fc;
+      --line:       #dbe2ea;
+      --line-soft:  #e6ebf1;
+      --text:       #0e141b;
+      --text-mut:   #566374;
+      --text-dim:   #8592a1;
+      --green:      #1f9d67;
+      --green-ink:  #148a58;
+      --green-bg:   rgba(31,157,103,0.10);
+      --amber:      #c9752f;
+      --amber-ink:  #b3671f;
+      --amber-bg:   rgba(201,117,47,0.10);
+      --red:        #d23b45;
+      --red-bg:     rgba(210,59,69,0.09);
+      --brand:      #2f6fd0;
+      --shadow:     0 24px 55px -30px rgba(20,40,70,0.35);
+      color-scheme: light;
+    }
+  }
+
+  :root[data-theme="light"] {
+    --ink:        #f4f6f9;
+    --ink-2:      #eef1f6;
+    --panel:      #ffffff;
+    --panel-2:    #f7f9fc;
+    --line:       #dbe2ea;
+    --line-soft:  #e6ebf1;
+    --text:       #0e141b;
+    --text-mut:   #566374;
+    --text-dim:   #8592a1;
+    --green:      #1f9d67;
+    --green-ink:  #148a58;
+    --green-bg:   rgba(31,157,103,0.10);
+    --amber:      #c9752f;
+    --amber-ink:  #b3671f;
+    --amber-bg:   rgba(201,117,47,0.10);
+    --red:        #d23b45;
+    --red-bg:     rgba(210,59,69,0.09);
+    --brand:      #2f6fd0;
+    --shadow:     0 24px 55px -30px rgba(20,40,70,0.35);
+    color-scheme: light;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--ink);
+    color: var(--text);
+    font-family: var(--sans);
+    font-weight: 400;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    overflow-x: hidden;
+  }
+
+  a { color: inherit; text-decoration: none; }
+
+  .wrap { width: 100%; max-width: var(--maxw); margin: 0 auto; padding: 0 24px; }
+
+  .mono { font-family: var(--mono); }
+
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--text-mut);
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .eyebrow::before {
+    content: "";
+    width: 22px; height: 1px;
+    background: var(--green);
+    display: inline-block;
+  }
+
+  h1, h2, h3 { font-family: var(--sans); font-weight: 600; letter-spacing: -0.02em; line-height: 1.05; margin: 0; }
+
+  /* ---------- top nav ---------- */
+  header.nav {
+    position: sticky; top: 0; z-index: 50;
+    backdrop-filter: saturate(140%) blur(10px);
+    background: color-mix(in srgb, var(--ink) 82%, transparent);
+    border-bottom: 1px solid var(--line-soft);
+  }
+  .nav-in { display: flex; align-items: center; justify-content: space-between; height: 62px; }
+  .brand { display: flex; align-items: center; gap: 11px; font-family: var(--mono); font-weight: 700; letter-spacing: -0.01em; font-size: 15px; }
+  .brand .dot {
+    width: 12px; height: 12px; border-radius: 3px;
+    background: var(--green);
+    box-shadow: 0 0 0 4px var(--green-bg);
+    flex: none;
+  }
+  .brand small { color: var(--text-dim); font-weight: 400; }
+  .nav-links { display: flex; align-items: center; gap: 26px; }
+  .nav-links a { font-size: 14px; color: var(--text-mut); transition: color .15s; }
+  .nav-links a:hover { color: var(--text); }
+  .nav-cta { display: flex; align-items: center; gap: 6px; }
+
+  .btn {
+    display: inline-flex; align-items: center; gap: 9px;
+    font-family: var(--sans); font-weight: 500; font-size: 15px;
+    padding: 11px 18px; border-radius: 9px; cursor: pointer;
+    border: 1px solid transparent; transition: transform .12s ease, background .15s, border-color .15s;
+    white-space: nowrap;
+  }
+  .btn:active { transform: translateY(1px); }
+  .btn-primary { background: var(--green); color: #04140c; font-weight: 600; }
+  .btn-primary:hover { background: color-mix(in srgb, var(--green) 88%, white); }
+  .btn-ghost { background: transparent; color: var(--text); border-color: var(--line); font-family: var(--mono); font-size: 14px; }
+  .btn-ghost:hover { border-color: var(--text-mut); background: var(--panel); }
+  .btn svg { width: 16px; height: 16px; flex: none; }
+
+  .icon-btn {
+    width: 38px; height: 38px; border-radius: 9px; display: inline-flex; align-items: center; justify-content: center;
+    border: 1px solid var(--line); background: transparent; color: var(--text-mut); cursor: pointer; transition: color .15s, border-color .15s;
+  }
+  .icon-btn:hover { color: var(--text); border-color: var(--text-mut); }
+  .icon-btn svg { width: 17px; height: 17px; }
+
+  /* ---------- section frame ---------- */
+  section { padding: 96px 0; border-top: 1px solid var(--line-soft); position: relative; }
+  .sec-head { max-width: 660px; margin-bottom: 46px; }
+  .sec-head h2 { font-size: clamp(28px, 4vw, 40px); margin-top: 16px; }
+  .sec-head p { color: var(--text-mut); font-size: 17px; margin: 16px 0 0; }
+
+  /* =====================================================
+     HERO
+     ===================================================== */
+  .hero { border-top: none; padding: 76px 0 92px; }
+  .hero-grid { display: grid; grid-template-columns: 1.02fr 0.98fr; gap: 56px; align-items: center; }
+  .hero h1 {
+    font-size: clamp(34px, 5.4vw, 60px);
+    margin: 22px 0 0;
+    letter-spacing: -0.035em;
+    max-width: 15ch;
+  }
+  .hero h1 .heal { color: var(--green); }
+  .hero .sub { color: var(--text-mut); font-size: 18px; line-height: 1.6; margin: 24px 0 0; max-width: 46ch; }
+  .hero .cta-row { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 34px; align-items: center; }
+  .hero .meta { margin-top: 26px; display: flex; flex-wrap: wrap; gap: 8px 22px; font-family: var(--mono); font-size: 12.5px; color: var(--text-dim); }
+  .hero .meta b { color: var(--text-mut); font-weight: 400; }
+  .hero .meta span { display: inline-flex; align-items: center; gap: 7px; }
+  .hero .meta i { width: 6px; height: 6px; border-radius: 50%; background: var(--green); font-style: normal; }
+
+  /* ---------- the PR artifact card ---------- */
+  .pr {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    box-shadow: var(--shadow);
+    overflow: hidden;
+    font-size: 13.5px;
+  }
+  .pr-top { display: flex; align-items: center; gap: 9px; padding: 13px 16px; border-bottom: 1px solid var(--line-soft); background: var(--panel-2); }
+  .pr-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--line); }
+  .pr-dot.g { background: var(--green); }
+  .pr-top .path { font-family: var(--mono); font-size: 12px; color: var(--text-dim); margin-left: auto; }
+
+  .pr-head { padding: 18px 18px 16px; border-bottom: 1px solid var(--line-soft); }
+  .pr-state { display: inline-flex; align-items: center; gap: 7px; font-family: var(--mono); font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--green-ink); background: var(--green-bg); padding: 5px 10px; border-radius: 999px; }
+  .pr-state svg { width: 12px; height: 12px; }
+  .pr-title { font-size: 18px; font-weight: 600; margin: 13px 0 6px; letter-spacing: -0.01em; }
+  .pr-branch { font-family: var(--mono); font-size: 12px; color: var(--text-dim); }
+  .pr-branch b { color: var(--brand); font-weight: 400; }
+
+  .pr-diff { font-family: var(--mono); font-size: 12.5px; line-height: 1.85; padding: 12px 0; border-bottom: 1px solid var(--line-soft); }
+  .pr-diff .fname { padding: 0 18px 8px; color: var(--text-dim); font-size: 11.5px; }
+  .pr-diff .ln { padding: 0 18px; display: block; white-space: pre; overflow-x: auto; }
+  .pr-diff .ln.ctx { color: var(--text-mut); }
+  .pr-diff .ln.del { background: var(--red-bg); color: var(--red); }
+  .pr-diff .ln.add { background: var(--green-bg); color: var(--green-ink); }
+  .pr-diff .ln .mk { display: inline-block; width: 1.4ch; opacity: .8; }
+
+  .pr-note { padding: 15px 18px; border-bottom: 1px solid var(--line-soft); color: var(--text-mut); font-size: 13.5px; line-height: 1.6; }
+  .pr-note b { color: var(--text); font-weight: 500; }
+  .pr-note .who { font-family: var(--mono); color: var(--brand); }
+
+  .pr-evi { padding: 15px 18px 6px; }
+  .pr-evi .lbl { font-family: var(--mono); font-size: 10.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--text-dim); margin-bottom: 11px; }
+  .pr-evi ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 9px; }
+  .pr-evi li { display: flex; align-items: center; gap: 10px; font-family: var(--mono); font-size: 12.5px; color: var(--text-mut); }
+  .pr-evi li .chk {
+    width: 17px; height: 17px; border-radius: 50%; background: var(--green-bg); color: var(--green);
+    display: inline-flex; align-items: center; justify-content: center; flex: none;
+  }
+  .pr-evi li .chk svg { width: 10px; height: 10px; }
+
+  .pr-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; padding: 15px 18px 17px; }
+  .tag { font-family: var(--mono); font-size: 11.5px; padding: 5px 10px; border-radius: 7px; border: 1px solid var(--line); }
+  .tag b { font-weight: 700; }
+  .tag.conf { color: var(--green-ink); border-color: color-mix(in srgb, var(--green) 40%, var(--line)); }
+  .tag.risk { color: var(--text-mut); }
+  .pr-foot .approve { margin-left: auto; font-family: var(--mono); font-size: 11.5px; color: var(--text-dim); }
+  .pr-foot .approve b { color: var(--green-ink); font-weight: 400; }
+
+  /* =====================================================
+     PROBLEM
+     ===================================================== */
+  .prob-grid { display: grid; grid-template-columns: 1fr 0.9fr; gap: 56px; align-items: start; }
+  .prob-copy p { color: var(--text-mut); font-size: 17px; }
+  .prob-copy p + p { margin-top: 16px; }
+  .prob-copy strong { color: var(--text); font-weight: 600; }
+
+  .loop { border: 1px solid var(--line); border-radius: 13px; background: var(--panel); overflow: hidden; }
+  .loop-h { font-family: var(--mono); font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--amber-ink); background: var(--amber-bg); padding: 11px 16px; border-bottom: 1px solid var(--line-soft); display: flex; align-items: center; gap: 9px; }
+  .loop-h::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--amber); flex: none; box-shadow: 0 0 0 4px var(--amber-bg); }
+  .loop ol { margin: 0; padding: 8px 0; list-style: none; counter-reset: step; }
+  .loop li { display: flex; align-items: baseline; gap: 13px; padding: 9px 18px; font-family: var(--mono); font-size: 13.5px; color: var(--text-mut); }
+  .loop li::before { counter-increment: step; content: counter(step, decimal-leading-zero); color: var(--text-dim); font-size: 11px; flex: none; }
+  .loop li.last { color: var(--amber-ink); }
+  .loop li.last::before { content: "↻"; }
+
+  /* =====================================================
+     HOW IT WORKS — incident timeline
+     ===================================================== */
+  .tl { position: relative; margin-top: 8px; }
+  .tl::before { content: ""; position: absolute; left: 88px; top: 6px; bottom: 32px; width: 2px; background: linear-gradient(var(--amber), var(--green)); opacity: .5; }
+  @media (max-width: 720px){ .tl::before { left: 6px; } }
+
+  .step { display: grid; grid-template-columns: 76px 1fr; gap: 26px; padding: 16px 0; position: relative; }
+  .step .ts { font-family: var(--mono); font-size: 13px; color: var(--text-dim); text-align: right; padding-top: 2px; letter-spacing: -0.02em; }
+  .step .body { position: relative; padding-left: 26px; }
+  .step .body::before {
+    content: ""; position: absolute; left: -6px; top: 5px; width: 13px; height: 13px; border-radius: 50%;
+    background: var(--ink); border: 2px solid var(--text-dim);
+  }
+  .step.brk .body::before { border-color: var(--amber); background: var(--amber-bg); }
+  .step.fix .body::before { border-color: var(--green); background: var(--green-bg); }
+  .step h3 { font-family: var(--mono); font-size: 12px; letter-spacing: .1em; text-transform: uppercase; color: var(--text); font-weight: 700; margin-bottom: 7px; }
+  .step.brk h3 { color: var(--amber-ink); }
+  .step.fix h3 { color: var(--green-ink); }
+  .step p { margin: 0; color: var(--text-mut); font-size: 15px; max-width: 62ch; }
+  .step p code { font-family: var(--mono); font-size: 13px; color: var(--text); background: var(--panel); padding: 1px 6px; border-radius: 5px; border: 1px solid var(--line-soft); }
+  .step .evi-inline { color: var(--green-ink); }
+  @media (max-width: 720px){
+    .step { grid-template-columns: 1fr; gap: 4px; }
+    .step .ts { text-align: left; padding-left: 26px; }
+    .step .body { padding-top: 2px; }
+  }
+
+  /* =====================================================
+     USE CASES
+     ===================================================== */
+  .cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+  .card { border: 1px solid var(--line); border-radius: 13px; background: var(--panel); padding: 24px 22px; display: flex; flex-direction: column; gap: 12px; transition: border-color .15s, transform .15s; }
+  .card:hover { border-color: color-mix(in srgb, var(--green) 45%, var(--line)); transform: translateY(-2px); }
+  .card .k { font-family: var(--mono); font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--text-dim); }
+  .card h3 { font-size: 19px; }
+  .card p { margin: 0; color: var(--text-mut); font-size: 14.5px; }
+  .card .flag { align-self: flex-start; font-family: var(--mono); font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--green-ink); background: var(--green-bg); padding: 4px 9px; border-radius: 999px; }
+  .card code { font-family: var(--mono); font-size: 13px; color: var(--text); background: var(--panel-2); padding: 2px 6px; border-radius: 5px; border: 1px solid var(--line-soft); }
+
+  /* =====================================================
+     TRUST
+     ===================================================== */
+  .trust-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 40px; }
+  .inv { display: flex; gap: 15px; padding: 16px 0; border-top: 1px solid var(--line-soft); }
+  .inv .no { flex: none; width: 30px; height: 30px; border-radius: 8px; display: inline-flex; align-items: center; justify-content: center; background: var(--green-bg); color: var(--green); }
+  .inv .no svg { width: 15px; height: 15px; }
+  .inv h3 { font-size: 16px; margin-bottom: 5px; }
+  .inv p { margin: 0; color: var(--text-mut); font-size: 14px; }
+  .inv p code { font-family: var(--mono); font-size: 12.5px; color: var(--text); }
+
+  .invariant-line { margin-top: 40px; padding: 22px 24px; border: 1px dashed color-mix(in srgb, var(--green) 45%, var(--line)); border-radius: 12px; background: var(--green-bg); font-family: var(--mono); font-size: 14px; color: var(--text); display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+  .invariant-line b { color: var(--green-ink); }
+
+  /* =====================================================
+     OPEN SOURCE / STATUS
+     ===================================================== */
+  .oss-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 56px; align-items: start; }
+  .oss-copy p { color: var(--text-mut); font-size: 17px; }
+  .oss-copy .arch { font-family: var(--mono); font-size: 13px; color: var(--text-mut); margin-top: 20px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); line-height: 1.9; }
+  .oss-copy .arch b { color: var(--text); font-weight: 700; }
+
+  .status { border: 1px solid var(--line); border-radius: 13px; background: var(--panel); overflow: hidden; }
+  .status .sh { font-family: var(--mono); font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--text-dim); padding: 13px 18px; border-bottom: 1px solid var(--line-soft); display: flex; justify-content: space-between; }
+  .status ul { list-style: none; margin: 0; padding: 6px 0; }
+  .status li { display: flex; align-items: center; gap: 13px; padding: 13px 18px; border-top: 1px solid var(--line-soft); }
+  .status li:first-child { border-top: none; }
+  .status .badge { font-family: var(--mono); font-size: 10px; letter-spacing: .07em; text-transform: uppercase; padding: 4px 9px; border-radius: 999px; flex: none; margin-left: auto; }
+  .status .badge.done { color: var(--green-ink); background: var(--green-bg); }
+  .status .badge.wip  { color: var(--amber-ink); background: var(--amber-bg); }
+  .status .badge.next { color: var(--text-mut); border: 1px solid var(--line); }
+  .status .name { font-family: var(--sans); font-weight: 600; font-size: 15px; }
+  .status .desc { font-family: var(--mono); font-size: 12px; color: var(--text-dim); }
+  .status .txt { display: flex; flex-direction: column; gap: 2px; }
+
+  /* =====================================================
+     FOOTER
+     ===================================================== */
+  .foot { border-top: 1px solid var(--line-soft); padding: 70px 0 54px; }
+  .foot-cta { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 26px; margin-bottom: 54px; }
+  .foot-cta h2 { font-size: clamp(26px, 4vw, 38px); max-width: 18ch; }
+  .foot-cta .r { display: flex; gap: 12px; flex-wrap: wrap; }
+  .foot-bot { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px; padding-top: 26px; border-top: 1px solid var(--line-soft); font-family: var(--mono); font-size: 12.5px; color: var(--text-dim); }
+  .foot-bot a { color: var(--text-mut); }
+  .foot-bot a:hover { color: var(--text); }
+  .foot-bot .recap { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  .foot-bot .recap span { color: var(--text-dim); }
+  .foot-bot .recap b { color: var(--green-ink); font-weight: 400; }
+
+  /* ---------- motion: heal + tick ---------- */
+  @keyframes healIn { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
+  @keyframes tickIn { from { opacity: 0; transform: scale(.6); } to { opacity: 1; transform: none; } }
+
+  .anim .pr-diff .ln.add { opacity: 0; animation: healIn .5s ease forwards; animation-delay: .5s; }
+  .anim .pr-evi li { opacity: 0; animation: healIn .4s ease forwards; }
+  .anim .pr-evi li .chk { animation: tickIn .4s cubic-bezier(.2,1.4,.5,1) forwards; }
+  .anim .pr-evi li:nth-child(1){ animation-delay: .9s; } .anim .pr-evi li:nth-child(1) .chk { animation-delay: .9s; }
+  .anim .pr-evi li:nth-child(2){ animation-delay: 1.15s; } .anim .pr-evi li:nth-child(2) .chk { animation-delay: 1.15s; }
+  .anim .pr-evi li:nth-child(3){ animation-delay: 1.4s; } .anim .pr-evi li:nth-child(3) .chk { animation-delay: 1.4s; }
+  .anim .pr-state { opacity: 0; animation: healIn .4s ease forwards; animation-delay: 1.7s; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .anim .pr-diff .ln.add, .anim .pr-evi li, .anim .pr-evi li .chk, .anim .pr-state { opacity: 1; animation: none; }
+    .btn:active { transform: none; }
+  }
+
+  /* ---------- responsive ---------- */
+  @media (max-width: 940px) {
+    .hero-grid, .prob-grid, .oss-grid { grid-template-columns: 1fr; gap: 40px; }
+    .trust-grid { grid-template-columns: 1fr; gap: 0; }
+    .cards { grid-template-columns: 1fr; }
+    .nav-links { display: none; }
+    section { padding: 72px 0; }
+    .hero .meta { display: none; }
+  }
+  @media (max-width: 520px) {
+    .wrap { padding: 0 18px; }
+    .foot-cta { flex-direction: column; align-items: flex-start; }
+  }
+
+  :focus-visible { outline: 2px solid var(--green); outline-offset: 2px; border-radius: 4px; }
+</style>
+
+<header class="nav">
+  <div class="wrap nav-in">
+    <a class="brand" href="#top" aria-label="sibei-flow home">
+      <span class="dot" aria-hidden="true"></span>
+      sibei-flow <small>/ sbflow</small>
+    </a>
+    <nav class="nav-links" aria-label="Primary">
+      <a href="#problem">The 3am loop</a>
+      <a href="#how">How it works</a>
+      <a href="#trust">Trust</a>
+      <a href="#oss">Open source</a>
+    </nav>
+    <div class="nav-cta">
+      <button class="icon-btn" id="theme" aria-label="Toggle light and dark theme" title="Toggle theme">
+        <svg id="theme-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"></path></svg>
+      </button>
+      <a class="btn btn-primary" href="https://github.com/leejianrong/sibei-flow" target="_blank" rel="noopener">
+        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .5A11.5 11.5 0 0 0 .5 12a11.5 11.5 0 0 0 7.86 10.92c.58.1.79-.25.79-.56v-2c-3.2.7-3.88-1.54-3.88-1.54-.53-1.34-1.29-1.7-1.29-1.7-1.05-.72.08-.7.08-.7 1.16.08 1.77 1.2 1.77 1.2 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.55-.29-5.24-1.28-5.24-5.68 0-1.26.45-2.29 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.18 1.18a11 11 0 0 1 5.8 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.24 2.76.12 3.05.74.8 1.18 1.83 1.18 3.09 0 4.41-2.69 5.38-5.25 5.67.41.36.78 1.05.78 2.12v3.14c0 .31.21.67.8.56A11.5 11.5 0 0 0 23.5 12 11.5 11.5 0 0 0 12 .5Z"/></svg>
+        Star on GitHub
+      </a>
+    </div>
+  </div>
+</header>
+
+<main id="top">
+
+  <!-- ============ HERO ============ -->
+  <section class="hero">
+    <div class="wrap hero-grid">
+      <div class="hero-copy">
+        <span class="eyebrow">Self-healing data pipelines</span>
+        <h1>Your dbt run broke at 3am. The fix was a <span class="heal">pull request</span> by morning.</h1>
+        <p class="sub">sibei-flow watches your dbt-in-Airflow pipelines. When one breaks from schema drift or a SQL error, it diagnoses the failure, verifies a fix in a sandbox, and opens a reviewable PR — in about 90 seconds, while you sleep.</p>
+        <div class="cta-row">
+          <a class="btn btn-primary" href="https://github.com/leejianrong/sibei-flow" target="_blank" rel="noopener">
+            <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .5A11.5 11.5 0 0 0 .5 12a11.5 11.5 0 0 0 7.86 10.92c.58.1.79-.25.79-.56v-2c-3.2.7-3.88-1.54-3.88-1.54-.53-1.34-1.29-1.7-1.29-1.7-1.05-.72.08-.7.08-.7 1.16.08 1.77 1.2 1.77 1.2 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.55-.29-5.24-1.28-5.24-5.68 0-1.26.45-2.29 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.18 1.18a11 11 0 0 1 5.8 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.24 2.76.12 3.05.74.8 1.18 1.83 1.18 3.09 0 4.41-2.69 5.38-5.25 5.67.41.36.78 1.05.78 2.12v3.14c0 .31.21.67.8.56A11.5 11.5 0 0 0 23.5 12 11.5 11.5 0 0 0 12 .5Z"/></svg>
+            Star on GitHub
+          </a>
+          <span class="btn btn-ghost" title="Self-host on a laptop or a single VM">$ docker compose up</span>
+        </div>
+        <div class="meta">
+          <span><i></i><b>Apache-2.0</b></span>
+          <span><i></i><b>Self-hosted · no cluster</b></span>
+          <span><i></i><b>BYO / local LLM</b></span>
+          <span><i></i><b>Only write action: a PR</b></span>
+        </div>
+      </div>
+
+      <!-- the artifact: a pull request -->
+      <div class="pr" role="img" aria-label="A pull request opened by sibei-flow: fix the orders model after an upstream customer_id to cust_id rename. Diff replaces customer_id with cust_id. Evidence: compiled, ran on a 10,000-row sample, output schema unchanged. Confidence high, risk low.">
+        <div class="pr-top">
+          <span class="pr-dot g"></span><span class="pr-dot"></span><span class="pr-dot"></span>
+          <span class="path">github.com/acme/analytics · pull/428</span>
+        </div>
+        <div class="pr-head">
+          <span class="pr-state"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M6 9v6a3 3 0 0 0 3 3h6"/></svg> Open · ready for review</span>
+          <div class="pr-title">Fix <code style="font-family:var(--mono);font-size:15px">orders</code> after customer_id → cust_id rename</div>
+          <div class="pr-branch">merge <b>sbflow/heal-orders-cust_id</b> into <b>main</b></div>
+        </div>
+
+        <div class="pr-diff" aria-hidden="true">
+          <div class="fname">models/marts/orders.sql</div>
+          <span class="ln ctx"><span class="mk"> </span>select</span>
+          <span class="ln del"><span class="mk">-</span>  customer_id,</span>
+          <span class="ln add"><span class="mk">+</span>  cust_id,</span>
+          <span class="ln ctx"><span class="mk"> </span>  order_total</span>
+          <span class="ln ctx"><span class="mk"> </span>from {{ ref('raw_customers') }}</span>
+        </div>
+
+        <div class="pr-note">
+          <b>What changed:</b> <span class="who">sbflow[bot]</span> found that <code style="font-family:var(--mono)">raw_customers.customer_id</code> was renamed to <code style="font-family:var(--mono)">cust_id</code> upstream. The <b>orders</b> model still referenced the old name. Updated the reference — output columns are unchanged.
+        </div>
+
+        <div class="pr-evi">
+          <div class="lbl">Verification evidence</div>
+          <ul>
+            <li><span class="chk"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span> compiled with dbt</li>
+            <li><span class="chk"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span> ran on a 10k-row sample</li>
+            <li><span class="chk"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span> output schema unchanged</li>
+          </ul>
+        </div>
+
+        <div class="pr-foot">
+          <span class="tag conf">confidence <b>High</b></span>
+          <span class="tag risk">risk <b>Low</b></span>
+          <span class="approve">merge to <b>approve</b> · close to reject</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ PROBLEM ============ -->
+  <section id="problem">
+    <div class="wrap prob-grid">
+      <div class="prob-copy">
+        <div class="sec-head" style="margin-bottom:24px">
+          <span class="eyebrow">The 3am loop</span>
+          <h2>Nobody's watching when it breaks.</h2>
+        </div>
+        <p>Several times a month an upstream column gets <strong>renamed, removed, or retyped</strong> — or a bad SQL change slips in — and the nightly dbt run fails. Nobody's awake. It's found hours later because a dashboard went stale.</p>
+        <p>Then an engineer burns <strong>30 to 90 minutes</strong> on an interrupt-driven, off-hours loop: read the traceback, find the failing model, work out what changed upstream, patch it, re-run. Airflow and dbt tell you <em>that</em> something broke. Nothing tells you <em>what the fix is</em>.</p>
+        <p>It's demoralizing, it recurs, and it scales badly as models multiply — and a 3-to-15-person team has no platform crew to build tooling for it.</p>
+      </div>
+      <div class="loop" aria-label="The manual repair loop">
+        <div class="loop-h">the manual loop</div>
+        <ol>
+          <li>page fires — dashboard is stale</li>
+          <li>open the traceback, half-awake</li>
+          <li>git blame the failing model</li>
+          <li>diff the upstream schema by hand</li>
+          <li>patch the SQL, re-run, wait</li>
+          <li class="last">next month, again</li>
+        </ol>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ HOW IT WORKS ============ -->
+  <section id="how">
+    <div class="wrap">
+      <div class="sec-head">
+        <span class="eyebrow">How it works · ~90 seconds, start to PR</span>
+        <h2>An incident that resolves itself before you wake up.</h2>
+        <p>The same failure, walked from the 3am break to the pull request waiting in your queue. No standing access — sibei-flow only ever hears about the run that broke.</p>
+      </div>
+
+      <div class="tl">
+        <div class="step brk">
+          <div class="ts">03:00:00</div>
+          <div class="body">
+            <h3>Break</h3>
+            <p><code>dbt_build_orders</code> fails: <em>column "customer_id" does not exist</em>. Airflow's <code>on_failure_callback</code> POSTs a structured failure payload to the brain. That webhook is the entire integration — one line in a DAG.</p>
+          </div>
+        </div>
+        <div class="step">
+          <div class="ts">03:00:12</div>
+          <div class="body">
+            <h3>Detect</h3>
+            <p>The Rust brain classifies the failure as schema drift, in-scope, and opens a durable repair job. Out-of-scope failures — OOM, timeouts — are recorded and never dispatched, so your review queue stays clean.</p>
+          </div>
+        </div>
+        <div class="step">
+          <div class="ts">03:00:31</div>
+          <div class="body">
+            <h3>Diagnose</h3>
+            <p>A bounded agent reads the failing model <strong>read-only</strong>, pulls the current upstream schema, and pinpoints the drift: <code>customer_id</code> is gone, <code>cust_id</code> is present — a 1:1 rename.</p>
+          </div>
+        </div>
+        <div class="step">
+          <div class="ts">03:01:05</div>
+          <div class="body">
+            <h3>Verify</h3>
+            <p>It drafts a minimal edit and builds it in an ephemeral Docker sandbox: <span class="evi-inline">compiled ✓ · ran on a 10k-row sample ✓ · output schema unchanged ✓</span>. A fix that can't even compile <strong>never</strong> becomes a PR.</p>
+          </div>
+        </div>
+        <div class="step fix">
+          <div class="ts">03:01:18</div>
+          <div class="body">
+            <h3>Propose</h3>
+            <p>A pull request appears on a branch — never <code>main</code>. It carries the diff, a plain-English explanation, the agent's full reasoning transcript, the verification evidence, and a confidence/risk label.</p>
+          </div>
+        </div>
+        <div class="step fix">
+          <div class="ts">08:41</div>
+          <div class="body">
+            <h3>You</h3>
+            <p>You wake up, read a five-line diff, and merge. The next run is green. Merging <em>is</em> the approval; closing rejects it; <code>git revert</code> rolls it back. No second tool, no new approval surface.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ USE CASES ============ -->
+  <section id="cases">
+    <div class="wrap">
+      <div class="sec-head">
+        <span class="eyebrow">What it fixes</span>
+        <h2>Two failure classes, honestly scoped.</h2>
+        <p>sibei-flow stays in its lane. It fixes what's small and mechanical to diagnose but expensive to catch at 3am — and hands everything else back to you.</p>
+      </div>
+      <div class="cards">
+        <div class="card">
+          <span class="flag">Flagship</span>
+          <span class="k">schema drift</span>
+          <h3>Upstream shape changed</h3>
+          <p>A column is renamed, removed, retyped, or turns nullable and a downstream model breaks. sibei-flow diffs the referenced columns against the live upstream schema and updates the model to match.</p>
+        </div>
+        <div class="card">
+          <span class="k">code / SQL error</span>
+          <h3>A bad change slipped in</h3>
+          <p>A broken reference or malformed SQL fails the build. The agent reads the error and the source, drafts a corrected diff, and only proposes it once it compiles clean in the sandbox.</p>
+        </div>
+        <div class="card">
+          <span class="k">cron &amp; scripts</span>
+          <h3>No callback? Wrap it.</h3>
+          <p>For a step with no failure hook, prefix it: <code>sbflow run -- &lt;cmd&gt;</code>. A non-zero exit is captured and sent as the same failure payload — same path, same PR.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ TRUST ============ -->
+  <section id="trust">
+    <div class="wrap">
+      <div class="sec-head">
+        <span class="eyebrow">Trust by construction</span>
+        <h2>The only thing it can write is a pull request.</h2>
+        <p>Adopting a tool that touches your pipelines shouldn't need a security review to veto it. The guarantees here aren't policy — they're structural. The credentials to do harm simply don't exist in the system.</p>
+      </div>
+
+      <div class="trust-grid">
+        <div class="inv">
+          <span class="no" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12s3-7 8-7 8 7 8 7-3 7-8 7-8-7-8-7Z"/><line x1="3" y1="3" x2="21" y2="21"/></svg></span>
+          <div><h3>No standing access</h3><p>Detection is a webhook. sibei-flow never sits inside your infrastructure or holds a session to it — it only learns about the run that broke.</p></div>
+        </div>
+        <div class="inv">
+          <span class="no" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg></span>
+          <div><h3>Source is read-only</h3><p>It reads your git repo at the failing ref through a scoped token — and nothing else. No writes to your source, ever.</p></div>
+        </div>
+        <div class="inv">
+          <span class="no" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M6 9v6a3 3 0 0 0 3 3h6"/></svg></span>
+          <div><h3>The only write is a PR</h3><p>On a branch — never <code>main</code>, never a production table. No prod-write credential exists anywhere in the system to be misused.</p></div>
+        </div>
+        <div class="inv">
+          <span class="no" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span>
+          <div><h3>Verified before you see it</h3><p>Every candidate is compiled and test-run in an ephemeral sandbox first. If it can't compile, it never reaches your queue.</p></div>
+        </div>
+        <div class="inv">
+          <span class="no" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/></svg></span>
+          <div><h3>Human-gated, always</h3><p>Propose-and-approve, never autonomous. Merge to approve, close to reject, <code>git revert</code> to roll back. No auto-apply in v1.</p></div>
+        </div>
+        <div class="inv">
+          <span class="no" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></span>
+          <div><h3>Your model, your keys</h3><p>Bring your own LLM — Claude, an OpenAI-compatible endpoint, or a fully local model. Your source and schema never leave an account you control.</p></div>
+        </div>
+      </div>
+
+      <div class="invariant-line">
+        <span>The hard invariant, in one line:</span>
+        <span><b>read-only source</b> in → <b>a branch PR</b> out. Nothing in between can touch <code style="color:inherit">main</code> or prod.</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ OPEN SOURCE / STATUS ============ -->
+  <section id="oss">
+    <div class="wrap oss-grid">
+      <div class="oss-copy">
+        <div class="sec-head" style="margin-bottom:20px">
+          <span class="eyebrow">Open source · Apache-2.0</span>
+          <h2>Self-host it on a laptop. Read every line.</h2>
+        </div>
+        <p>One <code style="font-family:var(--mono);color:var(--text)">docker compose up</code> stands up the whole stack. No cluster, no DSL, no migration — it rides on the dbt-in-Airflow setup you already run, and it's additive and reversible.</p>
+        <div class="arch">
+          <div><b>brain</b> &nbsp;— Rust · durable Postgres state, webhook, classify, dispatch</div>
+          <div><b>worker</b> — Python · the bounded agent loop, behind a BYO LlmProvider</div>
+          <div><b>ui</b> &nbsp;&nbsp;&nbsp;&nbsp;— read-only · run history, transcript, diff, evidence</div>
+        </div>
+      </div>
+
+      <div class="status" aria-label="Build status, shown honestly">
+        <div class="sh"><span>Building in the open</span><span>the wedge, sliced</span></div>
+        <ul>
+          <li>
+            <div class="txt"><span class="name">Detect</span><span class="desc">webhook → classified repair job</span></div>
+            <span class="badge done">shipped</span>
+          </li>
+          <li>
+            <div class="txt"><span class="name">Diagnose</span><span class="desc">agent reads source, drafts a minimal fix</span></div>
+            <span class="badge done">shipped</span>
+          </li>
+          <li>
+            <div class="txt"><span class="name">Verify</span><span class="desc">ephemeral sandbox: compile · sample · schema</span></div>
+            <span class="badge wip">in progress</span>
+          </li>
+          <li>
+            <div class="txt"><span class="name">Propose</span><span class="desc">open the PR with evidence + confidence</span></div>
+            <span class="badge next">next</span>
+          </li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ FOOTER ============ -->
+  <footer class="foot">
+    <div class="wrap">
+      <div class="foot-cta">
+        <h2>Stop diagnosing schema drift at 3am.</h2>
+        <div class="r">
+          <a class="btn btn-primary" href="https://github.com/leejianrong/sibei-flow" target="_blank" rel="noopener">
+            <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .5A11.5 11.5 0 0 0 .5 12a11.5 11.5 0 0 0 7.86 10.92c.58.1.79-.25.79-.56v-2c-3.2.7-3.88-1.54-3.88-1.54-.53-1.34-1.29-1.7-1.29-1.7-1.05-.72.08-.7.08-.7 1.16.08 1.77 1.2 1.77 1.2 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.55-.29-5.24-1.28-5.24-5.68 0-1.26.45-2.29 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.18 1.18a11 11 0 0 1 5.8 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.24 2.76.12 3.05.74.8 1.18 1.83 1.18 3.09 0 4.41-2.69 5.38-5.25 5.67.41.36.78 1.05.78 2.12v3.14c0 .31.21.67.8.56A11.5 11.5 0 0 0 23.5 12 11.5 11.5 0 0 0 12 .5Z"/></svg>
+            Star on GitHub
+          </a>
+          <a class="btn btn-ghost" href="https://github.com/leejianrong/sibei-flow#readme" target="_blank" rel="noopener">Read the docs →</a>
+        </div>
+      </div>
+      <div class="foot-bot">
+        <span>sibei-flow — AI SRE for data pipelines · Apache-2.0</span>
+        <div class="recap">
+          <b>detect</b><span>→</span><b>diagnose</b><span>→</span><b>verify</b><span>→</span><b>propose a PR</b>
+        </div>
+        <a href="https://github.com/leejianrong/sibei-flow" target="_blank" rel="noopener">github.com/leejianrong/sibei-flow</a>
+      </div>
+    </div>
+  </footer>
+
+</main>
+
+<script>
+  // Theme toggle — starts from system preference, remembers the choice for the session.
+  (function () {
+    var root = document.documentElement;
+    var btn = document.getElementById('theme');
+    function current() {
+      var attr = root.getAttribute('data-theme');
+      if (attr) return attr;
+      return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+    }
+    btn.addEventListener('click', function () {
+      var next = current() === 'dark' ? 'light' : 'dark';
+      root.setAttribute('data-theme', next);
+    });
+  })();
+
+  // Play the "heal" animation once the PR card scrolls into view (respects reduced-motion).
+  (function () {
+    var pr = document.querySelector('.pr');
+    if (!pr) return;
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    var io = new IntersectionObserver(function (entries) {
+      entries.forEach(function (e) {
+        if (e.isIntersecting) { pr.classList.add('anim'); io.disconnect(); }
+      });
+    }, { threshold: 0.35 });
+    io.observe(pr);
+  })();
+</script>
