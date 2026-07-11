@@ -1,0 +1,48 @@
+# Starter .pre-commit-config.yaml for sibei-flow — copy to the repo root.
+#
+#   uv tool install pre-commit   # or: pipx install pre-commit
+#   pre-commit install && pre-commit install --hook-type pre-push
+#   pre-commit run --all-files
+#
+# Keep pre-commit FAST (Python + hygiene + secrets). Rust checks and the test
+# suite live in CI / pre-push (see references/git-hooks.md), because this repo
+# has no local Rust/uv toolchain by default.
+minimum_pre_commit_version: "3.5.0"
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-added-large-files
+      - id: check-merge-conflict
+      - id: check-yaml
+      - id: check-json
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.8.4
+    hooks:
+      - id: ruff            # lint worker/ (autofix)
+        args: [--fix]
+        files: ^worker/
+      - id: ruff-format     # format worker/
+        files: ^worker/
+
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.21.2
+    hooks:
+      - id: gitleaks        # block committed secrets
+
+  # --- pre-push only: the containerized test gate ------------------------
+  # Heavier; runs on push, not every commit. Requires Docker (the Makefile
+  # runs the suites in throwaway containers). Comment out if too slow and rely
+  # on CI instead.
+  - repo: local
+    hooks:
+      - id: make-test-worker
+        name: make test-worker (claim + agent loop + sandbox)
+        entry: make test-worker
+        language: system
+        pass_filenames: false
+        stages: [pre-push]
+        files: ^worker/
