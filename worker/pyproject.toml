@@ -34,9 +34,10 @@ python_version = "3.12"
 # Third-party SDKs (anthropic/openai/psycopg) drive most of the remaining
 # friction; silence missing stubs but keep our own code checked.
 ignore_missing_imports = true
-# ADVISORY FIRST: ~11 pre-existing errors across the worker (psycopg row typing,
-# LLM SDK overloads). mypy runs non-blocking in CI + `make typecheck` until those
-# are cleared, then it graduates to a blocking gate. See the backlog card.
+# BLOCKING: the worker type-checks clean. mypy is a hard gate in CI, the
+# `typecheck` make target, and the pre-push hook. The only suppressions left are
+# targeted `# type: ignore` on the LLM SDK overloads (anthropic/openai), where
+# the neutral loop passes hand-built dicts the SDK's TypedDict overloads reject.
 warn_unused_ignores = true
 
 [tool.pytest.ini_options]

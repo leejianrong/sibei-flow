@@ -55,20 +55,17 @@ repos:
     hooks:
       - id: gitleaks        # block committed secrets
 
-  # --- Python type check: mypy (manual stage, ADVISORY) ---------------
-  # Runs via the project env (uv run --with) so imports resolve. Kept on the
-  # `manual` stage — NOT commit/push — because ~11 pre-existing type errors
-  # would otherwise block every commit. Run on demand:
-  #   pre-commit run mypy --hook-stage manual --all-files   (or `make typecheck`)
-  # Move `stages` to [pre-push] once the backlog card clears the errors.
+  # --- Python type check: mypy (pre-push stage, BLOCKING) -------------
+  # Runs via the project env (uv run --with) so imports resolve. The worker
+  # type-checks clean, so mypy is a blocking pre-push gate (same as CI).
   - repo: local
     hooks:
       - id: mypy
-        name: mypy (worker/) [advisory, manual]
+        name: mypy (worker/)
         entry: bash -c 'cd worker && uv run --with mypy mypy sbflow_worker'
         language: system
         pass_filenames: false
-        stages: [manual]
+        stages: [pre-push]
 
   # --- Rust format check, scoped to brain/ (commit stage) -------------
   # local `system` hook — see the "NOTE on cargo" block above re: availability.
