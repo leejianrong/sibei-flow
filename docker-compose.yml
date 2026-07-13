@@ -27,11 +27,25 @@ services:
       DATABASE_URL: postgres://sibei:sibei@postgres:5432/sibei
       BIND_ADDR: 0.0.0.0:8080
       RUST_LOG: info,brain=info,sqlx=warn
+      # V4 PR opener (ADR-0011). Default backend = offline: push the fix branch
+      # to the bundled bare git remote and record branch + compare as the "PR".
+      # No credentials, fully offline. Set GIT_HOST=github + GITHUB_TOKEN +
+      # GIT_REPO to open a REAL PR instead. GITHUB_TOKEN must be PR-scoped only —
+      # the system holds NO prod-write credential anywhere (R6.1).
+      GIT_HOST: "${GIT_HOST:-offline}"
+      GIT_REMOTE_URL: "${GIT_REMOTE_URL:-git://git-remote:9418/analytics.git}"
+      GIT_BASE_BRANCH: "${GIT_BASE_BRANCH:-main}"
+      GIT_REPO: "${GIT_REPO:-acme/analytics}"
+      GITHUB_TOKEN: "${GITHUB_TOKEN:-}"
+      GITHUB_API_URL: "${GITHUB_API_URL:-https://api.github.com}"
+      PR_POLL_INTERVAL: "${PR_POLL_INTERVAL:-2.0}"
     ports:
       - "8080:8080"
     depends_on:
       postgres:
         condition: service_healthy
+      git-remote:
+        condition: service_started
 
   # V2: fixture warehouse (post-rename upstream) for get_schema drift detection.
   warehouse:
@@ -161,9 +175,10 @@ services:
         condition: service_started
 
   # Offline bare git remote holding the dbt project (worker source-at-ref + the
-  # V4 PR opener's push target). No GitHub, no network egress.
+  # V4 PR opener's push target). No GitHub, no network egress. Part of the CORE
+  # stack (not just the hero profile) so `make up`/`make demo` and the offline
+  # PR opener always have a real branch/push target.
   git-remote:
-    profiles: ["hero"]
     build:
       context: ./hero/git-remote
     volumes:

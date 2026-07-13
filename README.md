@@ -1,4 +1,4 @@
-# sibei-flow — V1 + V2 + V3
+# sibei-flow — V1–V4
 
 > **V1** (`docs/design/V1-plan.md`) — the walking skeleton: a failure payload
 > travels the durable spine (webhook → classify → enqueue → claim → record →
@@ -10,7 +10,14 @@
 > an ephemeral Docker sandbox, so the run carries **honest evidence**
 > (compiled ✓ · sample ✓ / *not configured* · output schema unchanged ✓) plus a
 > **confidence/risk** label — and a fix that can't even compile is **suppressed to
-> `no_fix`**, never proposed. No PR yet (V4).
+> `no_fix`**, never proposed.
+> **V4** (`docs/design/V4-plan.md`) — **the auto-PR**: a verified `pr_proposed`
+> result becomes a real **Pull Request** on a branch, carrying the diff, a
+> plain-English explanation, the reasoning transcript, the verification evidence,
+> and the confidence/risk label. This is the **single write action** in the whole
+> system — a brain-side poller behind a pluggable git-host seam (ADR-0011):
+> `offline` (default; push to the bundled bare remote, no creds) or `github`
+> (a real PR via a **PR-scoped** token). Merge = approve; `git revert` = rollback.
 
 ## Architecture
 
@@ -33,8 +40,12 @@ POST /webhook ─▶ brain (Rust, axum+sqlx)
                              → RepairResult {outcome: pr_proposed, diff, explanation,
                                              transcript, evidence, confidence, risk_class, factors}
                              (or no_fix — including a non-compiling draft, suppressed by the gate)
+                        │
+     brain PR opener    ├─ poll: state=done ∧ outcome=pr_proposed ∧ pr_url IS NULL  (idempotent)
+     (N14, V4)          └─ git host (offline│github): clone → branch → apply diff → commit → push
+                             → open PR w/ rendered body → record pr_url on the job  ← ONLY write action
 
-GET /  ·  GET /api/runs  ·  GET /api/runs/:id     read-only dashboard (no write actions)
+GET /  ·  GET /api/runs  ·  GET /api/runs/:id     read-only dashboard (no write actions; links the PR)
 ```
 
 - **brain/** — Rust: webhook receiver, thin classifier, enqueue, dashboard read
@@ -58,7 +69,13 @@ GET /  ·  GET /api/runs  ·  GET /api/runs/:id     read-only dashboard (no writ
   (tier-2 targets a read-only *dev/sample*, never prod).
 - **docker-compose.yml** — `postgres` (state) + `warehouse` (fixture upstream +
   a writable `sbflow_dev`→`sbflow_sample` dev target for tier-2) + `brain` +
-  `worker`.
+  `worker` + `git-remote` (offline bare git repo — the V4 PR opener's push
+  target). The `hero` profile adds a real `airflow` + `airflow-db`.
+- **brain/src/pr/** — Rust: the **V4 PR opener** — a background poller plus the
+  pluggable git-host seam (`githost.rs` trait; `offline.rs` / `github.rs`
+  backends; `git.rs` CLI wrapper; `body.rs` PR body template). The only
+  credential it can ever hold is a PR-scoped GitHub token; it never touches the
+  warehouse (R6.1).
 
 ## Frozen contracts (stable into phase B)
 
@@ -153,8 +170,9 @@ The **hero pipeline** is a real Airflow + dbt environment that produces the
 flagship schema-drift failure and drives sibei-flow's loop end to end — the
 executable acceptance harness from `docs/design/HERO-PIPELINE.md`. It lives
 behind a compose **`hero` profile**, so the core stack stays lean; the hero
-services (`airflow`, its metadata DB, and an offline `git-remote`) only start
-with `--profile hero`.
+services (`airflow` and its metadata DB) only start with `--profile hero`. (The
+offline `git-remote` the PR opener pushes to is part of the **core** stack now,
+so `make up`/`make demo` open real offline PRs too.)
 
 ```bash
 # Bring up Airflow + dbt + the git remote, seed the HEALTHY (pre-rename) state,
@@ -184,13 +202,52 @@ prod-write credential; the only write is the PR (V4).
 
 The Seam-3 acceptance test is `worker/tests/test_hero.py` (marked `infra` +
 `hero`): with the stack up it seeds the healthy state, applies the rename, fires
-the exact Failure the Airflow callback sends, and asserts the loop heals it to
-`pr_proposed` with the minimal aliased diff + tier-1 evidence.
+the exact Failure the Airflow callback sends, asserts the loop heals it to
+`pr_proposed` with the minimal aliased diff + tier-1 evidence, **and** that the
+PR opener pushed a `sbflow/fix-…` branch to the bare remote and recorded it on
+the job (idempotently).
 
 ```bash
 docker compose up -d                                    # core stack must be up
 cd worker && uv run pytest -m hero                      # skips cleanly if not up
 ```
+
+## The auto-PR (V4)
+
+A verified `pr_proposed` job is turned into a real Pull Request by a brain-side
+poller — the **single write action** in the system. Nothing is opened for
+`no_fix` / `out_of_scope`, and `pr_url` on the job row is the idempotency guard
+(a PR is never opened twice). The backend is selected by `GIT_HOST`:
+
+**`offline` (default — no credentials, no egress).** The opener clones the
+bundled bare `git-remote`, branches, applies the diff, commits (the full PR body
+is preserved in the commit message), and pushes; the job records the branch + a
+`main...<branch>` compare ref, linked from the dashboard.
+
+```bash
+make up                       # core stack (incl. git-remote); GIT_HOST=offline
+./scripts/demo.sh             # POST a drift failure → heal → PR pushed to git-remote
+# inspect the pushed fix branch:
+git ls-remote --heads git://localhost:9418/analytics.git
+git clone -b <sbflow/fix-…> git://localhost:9418/analytics.git /tmp/fix && \
+  cat /tmp/fix/models/marts/orders.sql        # cust_id as customer_id
+```
+
+**`github` — open a real PR** with a **PR-scoped** token (never a prod-write
+credential):
+
+```bash
+GIT_HOST=github \
+GITHUB_TOKEN=ghp_...             # PR/contents scope on the target repo only
+GIT_REPO=your-org/your-analytics \
+GIT_BASE_BRANCH=main \
+  docker compose up -d brain
+```
+
+The brain then POSTs `POST /repos/{owner}/{repo}/pulls`; the returned PR URL is
+recorded on the job and shown as a link on the run detail page. sibei-flow holds
+**no** warehouse or prod-write credential in either mode — the only capability
+it adds is "push a branch + open a PR" (ADR-0005 / ADR-0011 / R6.1).
 
 ## Tests
 
@@ -249,12 +306,12 @@ docker run --rm --network sibei-flow_default -v "$PWD":/work -w /work/worker \
   bash -c 'apt-get update -qq && apt-get install -y -qq docker.io >/dev/null; uv sync --extra dev -q; uv run pytest'
 ```
 
-## What V3 deliberately does NOT do (later slices)
+## What V4 deliberately does NOT do (later slices)
 
-- No git write / branch / PR (V4) — the verified fix is a diff + evidence on the
-  dashboard, not yet a Pull Request.
 - No dedupe uniqueness, crash-recovery reconcile, `LISTEN/NOTIFY`, `sbflow init`,
-  `needs_prod_action` (V5).
+  `needs_prod_action` (V5). The PR opener's idempotency is a single-instance
+  `pr_url IS NULL` guard; a crash between push and record leaves a pushed branch
+  that the next poll would re-open (hardened in V5).
 - Only the **local Docker** executor backend (ADR-0008 seam only); no VM/K8s.
 - The system holds **no** prod-write credentials; source + warehouse access is
   read-only and tier-2 builds only into a **dev/sample** schema (never prod); the

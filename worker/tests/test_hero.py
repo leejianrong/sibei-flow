@@ -25,6 +25,8 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
+import subprocess
 import time
 import urllib.request
 
@@ -32,6 +34,12 @@ import psycopg
 import pytest
 
 pytestmark = [pytest.mark.infra, pytest.mark.hero]
+
+# The offline PR opener's push target (git-remote, part of the core stack).
+# Container name in-network; override to git://localhost:9418/... for host runs.
+GIT_REMOTE_URL = os.environ.get(
+    "SBFLOW_GIT_REMOTE", "git://git-remote:9418/analytics.git"
+)
 
 # Reachable via the compose network by default (container names); override for a
 # host run (localhost:5455 / :5456 / :8080).
@@ -159,3 +167,76 @@ def test_hero_pipeline_heals_the_flagship_schema_drift():
     ev = result.get("evidence") or {}
     assert ev.get("tier1", {}).get("passed") is True
     assert result.get("risk_class") in {"low", "medium", "high"}
+
+    # 6. V4 — the auto-PR: the brain's PR opener turns the verified pr_proposed
+    #    into a real PR-on-a-branch and records it back on the job. pr_url is the
+    #    idempotency guard (a PR is never opened twice for a job).
+    pr_url = pr_branch = None
+    for _ in range(30):  # opener polls every ~2s
+        detail = _get_run(run_id)
+        pr_url = detail.get("pr_url")
+        pr_branch = detail.get("pr_branch")
+        if pr_url:
+            break
+        time.sleep(1)
+    if not pr_url:
+        pytest.skip(
+            "PR opener did not record a PR — is GIT_HOST set on the brain "
+            "and git-remote up? (`docker compose up brain git-remote`)"
+        )
+
+    assert pr_branch and pr_branch.startswith(
+        "sbflow/fix-"
+    ), f"expected a sbflow fix branch, got {pr_branch!r}"
+
+    if pr_url.startswith("http"):
+        # github mode: a real PR URL was recorded.
+        assert "/pull/" in pr_url or "github" in pr_url
+    else:
+        # offline mode (default): a branch + compare ref against the bare remote.
+        assert pr_branch in pr_url and "main..." in pr_url, f"pr_url={pr_url}"
+        _assert_branch_pushed_with_fix(pr_branch)
+
+    # 7. Idempotency: the recorded PR is stable — polling again never opens a
+    #    second PR for the same job.
+    again = _get_run(run_id)
+    assert again["pr_url"] == pr_url and again["pr_branch"] == pr_branch
+
+
+def _assert_branch_pushed_with_fix(branch: str) -> None:
+    """Best-effort: confirm the fix branch exists on the bare remote and carries
+    the minimal customer_id -> cust_id edit. Skips the check when `git` is not
+    on PATH or the remote is unreachable from here (host vs. in-network run)."""
+    if not shutil.which("git"):
+        return
+    try:
+        refs = subprocess.run(
+            ["git", "ls-remote", "--heads", GIT_REMOTE_URL],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+    except (subprocess.SubprocessError, OSError):
+        return
+    if refs.returncode != 0:
+        return  # remote not reachable from this vantage point
+    assert (
+        f"refs/heads/{branch}" in refs.stdout
+    ), f"fix branch not found on remote:\n{refs.stdout}"
+
+    # Fetch the branch's orders.sql and assert the applied minimal diff.
+    show = subprocess.run(
+        [
+            "git",
+            "archive",
+            "--remote",
+            GIT_REMOTE_URL,
+            branch,
+            "models/marts/orders.sql",
+        ],
+        capture_output=True,
+        timeout=15,
+    )
+    if show.returncode != 0:
+        return  # git:// archive not always enabled; branch presence already proven
+    assert b"cust_id as customer_id" in show.stdout

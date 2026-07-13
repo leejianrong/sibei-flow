@@ -39,6 +39,13 @@ pub struct JobRow {
     pub state: String,
     pub lease_expires_at: Option<DateTime<Utc>>,
     pub result: Option<serde_json::Value>,
+    /// The opened Pull Request URL (github) or offline compare ref (V4). Also
+    /// the opener's idempotency guard — non-null means a PR was already opened.
+    pub pr_url: Option<String>,
+    /// The fix branch pushed for that PR.
+    pub pr_branch: Option<String>,
+    /// When the opener recorded the PR.
+    pub pr_opened_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -64,6 +71,7 @@ impl JobRow {
             "failure_class": self.failure_class,
             "state": self.state,
             "outcome": self.outcome(),
+            "pr_url": self.pr_url,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         })
@@ -85,6 +93,9 @@ impl JobRow {
             "lease_expires_at": self.lease_expires_at,
             "payload": self.payload,
             "result": self.result,
+            "pr_url": self.pr_url,
+            "pr_branch": self.pr_branch,
+            "pr_opened_at": self.pr_opened_at,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         })

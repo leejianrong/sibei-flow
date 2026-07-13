@@ -9,8 +9,10 @@ COPY . .
 RUN cargo build --release --bin brain
 
 FROM debian:bookworm-slim
+# `git` is needed by the V4 PR opener (clone → branch → apply diff → push).
+# The git:// client transport used by the offline backend is built into core git.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates \
+    && apt-get install -y --no-install-recommends ca-certificates git \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=build /app/target/release/brain /usr/local/bin/brain
 EXPOSE 8080
