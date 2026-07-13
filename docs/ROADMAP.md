@@ -51,7 +51,9 @@ evidence; the merge is the sole path to prod.
 - Record PR URL on job row + link from dashboard
 - Prod-write guardrail test: no prod-write credential ever loaded
 - End-to-end latency measurement (p50 ≤ ~90s)
-- Live hero pipeline: runnable Airflow+dbt env (Seam-3 harness; fixtures seeded)
+- Live hero pipeline: runnable Airflow+dbt env (Seam-3 harness) — *done* (the
+  `docker compose --profile hero` stack + `make hero` / `hero-break`; the live
+  loop heals real warehouse drift end to end. The PR-opener half is still V4.)
 
 ### M5: Hardening & Onboarding (V5) — *todo*
 Production-trust properties (durability, dedup, honest prod-action
