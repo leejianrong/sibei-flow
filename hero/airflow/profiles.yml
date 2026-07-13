@@ -1,0 +1,16 @@
+# dbt profile the hero DAG uses (mounted at /opt/airflow/dbt_profiles,
+# DBT_PROFILES_DIR points here). The DAG connects as the pipeline's OWN role
+# `analytics_app` (write access to raw + the analytics build schema) — distinct
+# from sibei-flow's read-only sbflow_ro and dev/sample sbflow_dev roles.
+analytics:
+  target: app
+  outputs:
+    app:
+      type: postgres
+      host: "{{ env_var('SBFLOW_WH_HOST', 'warehouse') }}"
+      port: "{{ env_var('SBFLOW_WH_PORT', '5432') | as_number }}"
+      user: "{{ env_var('ANALYTICS_APP_USER', 'analytics_app') }}"
+      password: "{{ env_var('ANALYTICS_APP_PASS', 'analytics_app') }}"
+      dbname: "{{ env_var('SBFLOW_WH_DB', 'warehouse') }}"
+      schema: analytics
+      threads: 1

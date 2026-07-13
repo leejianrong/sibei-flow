@@ -1,0 +1,5 @@
+version: 2
+
+models:
+  - name: stg_customers
+    description: "Passthrough staging over raw.raw_customers (hero staging stage)."

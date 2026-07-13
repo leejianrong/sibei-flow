@@ -93,6 +93,89 @@ services:
       brain:
         condition: service_started
 
+  # --- Hero pipeline (Seam-3 harness, docs/design/HERO-PIPELINE.md) ---------
+  # Everything below only starts under `docker compose --profile hero up`, so the
+  # core stack stays lean. It stands up a real Airflow + dbt pipeline that
+  # produces the flagship schema-drift failure and drives sibei-flow's loop live.
+
+  # Airflow's own metadata DB (dedicated; never touches the state/warehouse DBs).
+  airflow-db:
+    profiles: ["hero"]
+    image: postgres:16
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U airflow -d airflow"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - airflowdb:/var/lib/postgresql/data
+
+  # Single-container Airflow (standalone). dbt lives in an isolated venv baked
+  # into the image; the DAG's BashOperators call it. The one-line enrollment
+  # (on_failure_callback) POSTs failures to the brain's webhook.
+  airflow:
+    profiles: ["hero"]
+    build:
+      context: ./hero/airflow
+    command: standalone
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-db:5432/airflow
+      AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "False"
+      # Deterministic local admin (demo only) — visit the UI at localhost:8081.
+      _AIRFLOW_WWW_USER_USERNAME: admin
+      _AIRFLOW_WWW_USER_PASSWORD: admin
+      # Enrollment (read by the fixtures on_failure_callback).
+      SBFLOW_WEBHOOK_URL: http://brain:8080/webhook
+      SBFLOW_REPO: acme/analytics
+      SBFLOW_ADAPTER: postgres
+      # The dbt run_results.json the callback reads the REAL error + node uid
+      # from (matches the DAG's DBT_TARGET_PATH). Without it, a BashOperator only
+      # surfaces a generic "Bash command failed" exception (no drift signal).
+      SBFLOW_RUN_RESULTS: /tmp/dbt/target/run_results.json
+      # dbt → warehouse (the pipeline's own analytics_app role, not sibei-flow's).
+      SBFLOW_WH_HOST: warehouse
+      SBFLOW_WH_PORT: "5432"
+      SBFLOW_WH_DB: warehouse
+      ANALYTICS_APP_USER: analytics_app
+      ANALYTICS_APP_PASS: analytics_app
+    ports:
+      # Host 8081 → Airflow UI (8080 is the brain).
+      - "8081:8080"
+    volumes:
+      - ./dags:/opt/airflow/dags:ro
+      - ./fixtures:/opt/airflow/fixtures:ro
+      - ./fixtures/dbt_project:/opt/airflow/dbt_project:ro
+      - ./hero/airflow/profiles.yml:/opt/airflow/dbt_profiles/profiles.yml:ro
+    depends_on:
+      airflow-db:
+        condition: service_healthy
+      warehouse:
+        condition: service_healthy
+      brain:
+        condition: service_started
+
+  # Offline bare git remote holding the dbt project (worker source-at-ref + the
+  # V4 PR opener's push target). No GitHub, no network egress.
+  git-remote:
+    profiles: ["hero"]
+    build:
+      context: ./hero/git-remote
+    volumes:
+      - ./fixtures/dbt_project:/seed:ro
+      - gitremote:/srv/git
+    # git:// (host 9418) for a human/V4 to clone/inspect; reachable in-network as
+    # git://git-remote:9418/analytics.git.
+    ports:
+      - "9418:9418"
+
 volumes:
   pgdata:
   whdata:
+  airflowdb:
+  gitremote:

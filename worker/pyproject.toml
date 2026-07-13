@@ -44,4 +44,5 @@ testpaths = ["tests"]
 addopts = "--strict-markers"
 markers = [
     "infra: needs external infrastructure (Postgres state DB, fixture warehouse, and/or the Docker socket for the real dbt sandbox). Deselect the fast, no-infra layer with `-m \"not infra\"`.",
+    "hero: Seam-3 end-to-end acceptance against the LIVE hero stack (brain + worker + warehouse running via `docker compose up`; docs/design/HERO-PIPELINE.md). Implies `infra`; skips cleanly when the stack isn't up.",
 ]

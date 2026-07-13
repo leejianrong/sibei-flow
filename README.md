@@ -147,6 +147,51 @@ unchanged ✓* — with a **confidence** score and **risk: low**. The timeout ru
 configured"* disclosure; a deliberately non-compiling draft is suppressed to
 `no_fix` and never proposed.)
 
+## Run the live hero pipeline (Seam-3 harness)
+
+The **hero pipeline** is a real Airflow + dbt environment that produces the
+flagship schema-drift failure and drives sibei-flow's loop end to end — the
+executable acceptance harness from `docs/design/HERO-PIPELINE.md`. It lives
+behind a compose **`hero` profile**, so the core stack stays lean; the hero
+services (`airflow`, its metadata DB, and an offline `git-remote`) only start
+with `--profile hero`.
+
+```bash
+# Bring up Airflow + dbt + the git remote, seed the HEALTHY (pre-rename) state,
+# and run the analytics_daily DAG to a GREEN finish:
+make hero          # first run builds the Airflow image + migrates its metadata DB
+
+# Watch it heal: rename customer_id -> cust_id upstream and re-run the DAG.
+# dbt_build_orders now FAILS for real ('column "customer_id" does not exist'),
+# the on_failure_callback POSTs to the brain, and sibei-flow drafts + verifies
+# the customer_id -> cust_id fix -> a pr_proposed run in the dashboard:
+make hero-break
+
+open http://localhost:8080/     # sibei-flow dashboard (the healed run)
+open http://localhost:8081/     # Airflow UI (admin/admin) — see the red task
+
+make hero-down     # stop the hero stack (make clean also drops volumes)
+```
+
+How the "healthy-then-break" flow coexists with the tests: `db/warehouse/
+init.sql` is **unchanged** — it still seeds the POST-rename state the worker
+tests depend on. The hero flow instead drives the warehouse state live —
+`make hero` applies `db/warehouse/hero_seed.sql` (healthy) and `make hero-break`
+applies `db/warehouse/hero_break.sql` (the rename). The DAG runs dbt as a
+dedicated pipeline role (`analytics_app`), distinct from sibei-flow's read-only
+`sbflow_ro` / dev-sample `sbflow_dev` roles — sibei-flow itself still holds **no**
+prod-write credential; the only write is the PR (V4).
+
+The Seam-3 acceptance test is `worker/tests/test_hero.py` (marked `infra` +
+`hero`): with the stack up it seeds the healthy state, applies the rename, fires
+the exact Failure the Airflow callback sends, and asserts the loop heals it to
+`pr_proposed` with the minimal aliased diff + tier-1 evidence.
+
+```bash
+docker compose up -d                                    # core stack must be up
+cd worker && uv run pytest -m hero                      # skips cleanly if not up
+```
+
 ## Tests
 
 The suites need a reachable Postgres (state) and, for the rename agent test, the

@@ -1,9 +1,19 @@
 # Hero pipeline — the concrete Airflow target for the wow demo
 
-> **Status:** planned build (not yet implemented). This doc pins down the *one
-> concrete dbt-in-Airflow pipeline* the v1 acceptance demo runs against, and
-> records the decision to **actually build and run it** as the executable
-> end-to-end (PRD Seam 3) harness — not just fixtures.
+> **Status:** BUILT (Seam-3 harness live). The runnable environment described
+> below now exists behind `docker compose --profile hero` — a real Airflow +
+> dbt + offline git remote. `make hero` runs the `analytics_daily` DAG GREEN;
+> `make hero-break` renames the column and the DAG fails for real, driving
+> sibei-flow's loop to a verified `pr_proposed`. See README §"Run the live hero
+> pipeline" and `worker/tests/test_hero.py` (the Seam-3 acceptance test).
+>
+> The one piece still ahead is **V4's PR opener** — turning that `pr_proposed`
+> into an actual Pull Request against the git remote. Everything up to the
+> verified diff + evidence is live today.
+>
+> This doc pins down the *one concrete dbt-in-Airflow pipeline* the v1
+> acceptance demo runs against, and records the decision to **actually build and
+> run it** as the executable end-to-end (PRD Seam 3) harness — not just fixtures.
 >
 > **Ground truth it serves:** `PRD.md` §"Acceptance Scenario" (schema drift →
 > auto-PR) and `SLICES.md` Seam-3. This is the *instantiation* of that scenario,
@@ -102,16 +112,49 @@ Seam-3 executable acceptance test — not leave it as static fixtures. Concretel
 | **V4** | **the full live loop**: rename column → DAG fails → PR appears. This is the Show-HN demo and the first slice where the *whole* hero pipeline runs end to end. |
 | V5 | hardened: crash/restart mid-run, duplicate webhook safety, `sbflow run --`, `sbflow init`, latency tuning. |
 
-**Action item:** stand up `hero/` (Airflow + warehouse PG + dbt git repo + rename
-script) as the Seam-3 harness, landing incrementally so V4 can run the full loop
-live. Today's `fixtures/` (dbt project skeleton + canned payload + Airflow hook)
-is the seed of it.
+**Action item (DONE):** `hero/` stood up as the Seam-3 harness — see below.
 
-## Open choices to confirm when we build it
+## How it was built (the harness that now exists)
 
-- Airflow flavor for local dev: `apache/airflow` compose vs. `astro`/standalone
-  — pick the lightest that runs a `BashOperator` dbt task on a laptop.
-- Warehouse: reuse Postgres (matches the fixture adapter) for the demo; Snowflake/
-  BigQuery adapters are pattern-only in v1.
-- Git host for the PR: real GitHub (scoped token/App) vs. a local Gitea for a
-  fully-offline demo — decide at V4 (PR opener).
+Behind `docker compose --profile hero` (core stack stays lean without it):
+
+- **`airflow`** — a single `apache/airflow:2.10.4-python3.12` container running
+  `airflow standalone` with `LocalExecutor` (metadata in a dedicated `airflow-db`
+  Postgres). dbt lives in an **isolated venv** (`/opt/dbt-venv`, `dbt-core==1.9.4`
+  + `dbt-postgres==1.9.0`, matching the verification sandbox) so Airflow's and
+  dbt's pins never collide. It mounts `dags/`, the read-only dbt project, the
+  hero dbt `profiles.yml` (the pipeline's own `analytics_app` role), and the
+  `fixtures/` enrollment callback.
+- **`dags/analytics_daily.py`** — `dbt_seed → dbt_run_staging → dbt_build_orders`
+  BashOperators; `on_failure_callback = sbflow_on_failure` (the exact fixture
+  snippet). The failing task carries `SBFLOW_NODE_UID=model.analytics.orders` so
+  the worker resolves the failing source file.
+- **`git-remote`** — a fully-offline bare git repo (git daemon over `git://`)
+  seeded from the dbt project: the worker's read-at-ref source and V4's push
+  target. (The worker still reads via the compatible `LocalSourceProvider`
+  bind-mount today; the git remote is wired for V4.)
+- **healthy-then-break, without disturbing the test seed:** `db/warehouse/
+  init.sql` is untouched (it still seeds the POST-rename state the worker tests
+  rely on). The hero flow drives the warehouse state *live* instead:
+  `make hero` runs `db/warehouse/hero_seed.sql` (healthy, `customer_id` present)
+  before a GREEN run; `make hero-break` runs `db/warehouse/hero_break.sql`
+  (the `customer_id → cust_id` rename). The staging model (`stg_customers`,
+  `select *`) survives the rename so the failure surfaces precisely at
+  `dbt_build_orders`.
+
+### Choices, resolved
+
+- **Airflow flavor:** single-container `apache/airflow` standalone (LocalExecutor)
+  — the lightest thing that runs a `BashOperator` dbt task on a laptop. No
+  Astro/Celery.
+- **Warehouse:** reuse the fixture Postgres `warehouse` (matches the fixture
+  adapter); Snowflake/BigQuery stay pattern-only.
+- **Git host:** a local offline bare git remote for the demo. Real GitHub
+  (scoped token/App) is a V4 PR-opener config switch behind the same remote.
+
+### Slice status
+
+| Slice | Status against the live harness |
+|---|---|
+| V1–V3 | proven live: real read + drift diff + drafted `customer_id → cust_id`, verified in the ephemeral sandbox with evidence. |
+| **V4** | **remaining:** turn the verified `pr_proposed` into a real PR against `git-remote`. The rest of the loop (DAG fails → verified diff appears) runs end to end today. |
