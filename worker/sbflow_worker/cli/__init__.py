@@ -33,14 +33,21 @@ def build_parser() -> argparse.ArgumentParser:
         prog="sbflow",
         description="sibei-flow onboarding + cron-wrapper CLI.",
     )
-    p.add_argument("--config", help="path to the config file (overrides discovery)")
+    # Shared option, accepted after either subcommand (e.g. `sbflow run --config …`).
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument(
+        "--config", help="path to the config file (overrides discovery)"
+    )
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    p_init = sub.add_parser("init", help="interactive first-run onboarding")
+    p_init = sub.add_parser(
+        "init", parents=[common], help="interactive first-run onboarding"
+    )
     p_init.set_defaults(func="init")
 
     p_run = sub.add_parser(
         "run",
+        parents=[common],
         help="run a command; on non-zero exit report a Failure (use: run -- <cmd>)",
     )
     p_run.add_argument("--repo", help="override configured repo for this run")
