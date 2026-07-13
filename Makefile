@@ -36,7 +36,8 @@ SANDBOX_WORK  := /tmp/sbflow-sandbox
 
 .DEFAULT_GOAL := help
 .PHONY: help up up-build build sandbox down clean ps logs logs-brain logs-worker \
-        demo psql psql-warehouse test test-fast lint typecheck test-brain test-worker
+        demo psql psql-warehouse test test-fast lint typecheck test-brain test-worker \
+        hero hero-break hero-down logs-airflow
 
 help: ## List available targets
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -59,7 +60,7 @@ down: ## Stop the stack (keep volumes)
 	$(COMPOSE) down
 
 clean: ## Stop the stack and drop volumes (fresh Postgres + warehouse next up)
-	$(COMPOSE) down -v
+	$(COMPOSE) --profile hero down -v
 
 ps: ## Show container status
 	$(COMPOSE) ps
@@ -72,6 +73,19 @@ logs-brain: ## Tail the brain logs
 
 logs-worker: ## Tail the worker logs
 	$(COMPOSE) logs -f --tail=100 worker
+
+# --- hero pipeline (Seam-3 live harness: Airflow + dbt + git remote) --------
+hero: ## Live hero: up Airflow+dbt+git, seed healthy state, run analytics_daily GREEN
+	./scripts/hero.sh up
+
+hero-break: ## Rename customer_id->cust_id, re-run the DAG -> real failure -> heal
+	./scripts/hero.sh break
+
+hero-down: ## Stop the hero stack (use `make clean` to also drop volumes)
+	./scripts/hero.sh down
+
+logs-airflow: ## Tail the Airflow logs
+	$(COMPOSE) --profile hero logs -f --tail=100 airflow
 
 # --- demo & poking around --------------------------------------------------
 demo: ## Drive the end-to-end demo (POST failures, show the drafted result)
