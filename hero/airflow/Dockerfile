@@ -10,7 +10,11 @@ FROM apache/airflow:2.10.4-python3.12
 USER root
 RUN apt-get update \
     && apt-get install -y --no-install-recommends postgresql-client \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    # /opt is root-owned; hand the dbt venv dir to the airflow user so the
+    # unprivileged build step below can populate it.
+    && mkdir -p /opt/dbt-venv \
+    && chown -R airflow: /opt/dbt-venv
 
 USER airflow
 # Isolated dbt venv (never mixed into the Airflow environment).
