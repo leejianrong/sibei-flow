@@ -1,0 +1,238 @@
+# CI — the authoritative gate that protects `main` (cards #127, #165, #166).
+#
+# Mirrors the root Makefile / README so local == CI:
+#   - brain    → cargo fmt/clippy/test against a throwaway Postgres (#[sqlx::test]).
+#   - worker   → ruff + the REAL pytest suite, incl. the Docker-out-of-Docker
+#                dbt sandbox tests, against a seeded fixture warehouse.
+#   - security → cargo-audit + pip-audit (advisory) + gitleaks (hard fail).
+#
+# Determinism: the worker uses the keyless `replay` LlmProvider (compose default),
+# so NO ANTHROPIC_API_KEY / secret is needed in any blocking job (README
+# "Project conventions"; dev-guardrails ci-cd.md "Determinism in CI").
+#
+# Does NOT touch .github/workflows/pages.yml (separate, path-filtered deploy).
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# One in-flight run per ref; a new push cancels the previous run.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # --- brain (Rust) --------------------------------------------------------
+  # fmt + clippy + tests. `#[sqlx::test]` provisions a throwaway DB per test
+  # against a reachable Postgres, so a plain postgres:16 service is enough
+  # (brain uses no compile-time `query!` macros → no live DB needed to build).
+  brain:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: sibei
+          POSTGRES_PASSWORD: sibei
+          POSTGRES_DB: sibei
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U sibei -d sibei"
+          --health-interval 3s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      # Points sqlx at the service; the test macro creates/drops per-test DBs.
+      DATABASE_URL: postgres://sibei:sibei@localhost:5432/sibei
+    defaults:
+      run:
+        working-directory: brain
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain (stable + rustfmt + clippy)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo registry + target
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: brain
+
+      - name: cargo fmt --all --check
+        run: cargo fmt --all --check
+
+      - name: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: cargo test
+        run: cargo test
+
+  # --- worker (Python) -----------------------------------------------------
+  # ruff lint + the real pytest suite. The V3 sandbox tests spawn ephemeral
+  # dbt containers via the host Docker daemon (Docker-out-of-Docker) that must
+  # reach the fixture warehouse at hostname `warehouse` on a shared network.
+  #
+  # We therefore run the state + warehouse Postgres as containers on a
+  # user-defined network (named `sibei-flow_default`, matching compose) rather
+  # than as GitHub `services:` — service containers can't be seeded from the
+  # repo before checkout, and the ad-hoc sandbox containers need the `warehouse`
+  # network-alias to resolve. `pytest` itself runs natively on the runner and
+  # reaches `warehouse` via an /etc/hosts alias -> the published port, so the
+  # exact same WAREHOUSE_URL resolves for both pytest (host) and the spawned
+  # dbt containers (docker DNS). This gets the REAL suites running (not the
+  # no-Docker subset).
+  worker:
+    runs-on: ubuntu-latest
+    env:
+      # State DB (test_claim.py) — published on 5455, reached from host pytest.
+      DATABASE_URL: postgres://sibei:sibei@localhost:5455/sibei
+      # Warehouse (agent-loop rename + sandbox tests). `warehouse:5432` resolves
+      # on the host via /etc/hosts (-> published :5432) AND inside the sandbox
+      # containers via docker DNS on the shared network.
+      WAREHOUSE_URL: postgres://sbflow_ro:sbflow_ro@warehouse:5432/warehouse
+      SAMPLE_WAREHOUSE_URL: postgres://sbflow_dev:sbflow_dev@warehouse:5432/warehouse
+      # V3 sandbox wiring (README worker test invocation + compose defaults).
+      SANDBOX_IMAGE: sbflow-sandbox:latest
+      SANDBOX_NETWORK: sibei-flow_default
+      SANDBOX_WORK_DIR: /tmp/sbflow-sandbox
+      SANDBOX_TIMEOUT: "180"
+      # Keyless deterministic provider — never a real API key in the gate.
+      LLM_PROVIDER: replay
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: uv sync (frozen, with dev extras)
+        working-directory: worker
+        run: uv sync --frozen --extra dev
+
+      - name: ruff check
+        working-directory: worker
+        # ruff via uvx so lint doesn't depend on it being in the locked env.
+        # Pinned to the pre-commit template version for local == CI parity.
+        run: uvx ruff@0.8.4 check .
+
+      - name: ruff format --check (advisory)
+        working-directory: worker
+        continue-on-error: true
+        run: uvx ruff@0.8.4 format --check .
+
+      - name: mypy (advisory)
+        working-directory: worker
+        # ADVISORY: ~11 pre-existing type errors (psycopg row typing, LLM SDK
+        # overloads). Runs via the project env so imports resolve. Graduates to
+        # a hard fail once the backlog card clears the errors.
+        continue-on-error: true
+        run: uv run --with mypy mypy sbflow_worker
+
+      # --- bring up the state + fixture warehouse Postgres --------------------
+      - name: Start Postgres (state + warehouse) on a shared network
+        run: |
+          set -euo pipefail
+          docker network create sibei-flow_default || true
+
+          # State DB — published on 5455 (host pytest uses localhost:5455).
+          docker run -d --name state-pg \
+            --network sibei-flow_default --network-alias postgres \
+            -p 127.0.0.1:5455:5432 \
+            -e POSTGRES_USER=sibei -e POSTGRES_PASSWORD=sibei -e POSTGRES_DB=sibei \
+            postgres:16
+
+          # Fixture warehouse — published on 5432; reached as `warehouse:5432`.
+          docker run -d --name warehouse \
+            --network sibei-flow_default --network-alias warehouse \
+            -p 127.0.0.1:5432:5432 \
+            -e POSTGRES_USER=sibei -e POSTGRES_PASSWORD=sibei -e POSTGRES_DB=warehouse \
+            postgres:16
+
+          # Resolve `warehouse` from the runner host -> the published port.
+          echo "127.0.0.1 warehouse" | sudo tee -a /etc/hosts
+
+          # Wait for both to accept connections.
+          for c in state-pg warehouse; do
+            for i in $(seq 1 30); do
+              if docker exec "$c" pg_isready -U sibei >/dev/null 2>&1; then
+                echo "$c ready"; break
+              fi
+              sleep 2
+              if [ "$i" -eq 30 ]; then echo "$c did not become ready" >&2; exit 1; fi
+            done
+          done
+
+      - name: Seed the fixture warehouse (roles + schema)
+        # db/warehouse/init.sql creates sbflow_ro / sbflow_dev + the raw fixture.
+        # Normally run by docker-entrypoint-initdb.d on a fresh volume; here we
+        # load it explicitly since we start the plain image.
+        run: docker exec -i warehouse psql -U sibei -d warehouse < db/warehouse/init.sql
+
+      - name: Pre-bake the dbt verification sandbox image
+        # Mirrors `make sandbox`; the sandbox tests skip if this image is absent.
+        run: docker build -t sbflow-sandbox:latest sandbox
+
+      - name: Prepare sandbox work dir
+        run: mkdir -p "$SANDBOX_WORK_DIR"
+
+      - name: uv run pytest (claim + agent loop + REAL Docker sandbox)
+        working-directory: worker
+        run: uv run pytest -q
+
+  # --- security (cards #165 + #166) ----------------------------------------
+  # cargo-audit + pip-audit are advisory (continue-on-error) for the first
+  # landing so pre-existing advisories don't block merges while we gauge noise
+  # (dev-guardrails ci-cd.md: "Start non-blocking, then make blocking").
+  # gitleaks is a HARD FAIL — a committed secret must never merge.
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # gitleaks scans full history for leaked secrets.
+          fetch-depth: 0
+
+      # cargo-audit — RustSec advisories against brain/Cargo.lock.
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo (audit install)
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: cargo audit (advisory)
+        continue-on-error: true
+        working-directory: brain
+        run: cargo audit
+
+      # pip-audit — advisories against the worker's locked dependencies.
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: pip-audit (advisory)
+        continue-on-error: true
+        working-directory: worker
+        run: |
+          set -euo pipefail
+          uv export --frozen --extra dev --no-emit-project \
+            --format requirements-txt -o requirements-ci.txt
+          uvx pip-audit -r requirements-ci.txt
+
+      # gitleaks — secret scanning with the default ruleset (no config file).
+      # HARD FAIL: this step has no continue-on-error.
+      - name: gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

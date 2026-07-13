@@ -44,9 +44,12 @@ SAMPLE_URL = os.environ.get(
 NETWORK = os.environ.get("SANDBOX_NETWORK", "sibei-flow_default")
 WORK_DIR = os.environ.get("SANDBOX_WORK_DIR", "/tmp/sbflow-sandbox")
 
-pytestmark = pytest.mark.skipif(
-    shutil.which("docker") is None, reason="docker CLI not available"
-)
+pytestmark = [
+    pytest.mark.infra,
+    pytest.mark.skipif(
+        shutil.which("docker") is None, reason="docker CLI not available"
+    ),
+]
 
 
 def _runner(sample_url: str | None = SAMPLE_URL) -> SandboxRunner:

@@ -28,6 +28,10 @@ from sbflow_worker.llm.replay import ReplayProvider
 
 REPO = str(Path(__file__).resolve().parents[2] / "fixtures" / "dbt_project")
 MODEL = "models/marts/orders.sql"
+
+# The rename test reads the fixture warehouse (WAREHOUSE_URL); mark the module as
+# infra-dependent so `-m "not infra"` skips it. Deselect with `-m "not infra"`.
+pytestmark = pytest.mark.infra
 WAREHOUSE_URL = os.environ.get(
     "WAREHOUSE_URL", "postgres://sbflow_ro:sbflow_ro@warehouse:5432/warehouse"
 )

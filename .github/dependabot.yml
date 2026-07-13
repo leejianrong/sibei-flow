@@ -1,0 +1,35 @@
+# Dependabot — weekly dependency + action updates (card #165).
+#
+# Ecosystems mirror the repo layout: the Rust brain, the Python worker, and the
+# GitHub Actions workflows themselves.
+version: 2
+updates:
+  # Rust brain — Cargo.lock in /brain.
+  - package-ecosystem: "cargo"
+    directory: "/brain"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(deps)"
+
+  # Python worker — managed with uv (uv.lock in /worker). Dependabot's native
+  # `uv` ecosystem understands uv.lock; if the running Dependabot version
+  # rejects it, switch `package-ecosystem` to "pip" (same directory) — it will
+  # still update the pyproject.toml constraints.
+  - package-ecosystem: "uv"
+    directory: "/worker"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(deps)"
+
+  # GitHub Actions used by the workflows in /.github/workflows.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(ci)"
