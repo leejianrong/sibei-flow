@@ -19,7 +19,11 @@ def sbflow_on_failure(context) -> None:
         "repo": os.environ.get("SBFLOW_REPO", "acme/analytics"),
         "run_id": context["run_id"],
         "task_id": ti.task_id,
-        "node_uid": ti.task_id,          # dbt node unique_id when available
+        # The dbt node unique_id the failing task maps to. A dbt-aware wrapper
+        # knows this (e.g. model.analytics.orders); expose it via SBFLOW_NODE_UID
+        # so the brain/worker can resolve the failing source file. Falls back to
+        # the Airflow task_id when the mapping isn't provided.
+        "node_uid": os.environ.get("SBFLOW_NODE_UID") or ti.task_id,
         "error_text": str(exc) if exc else "task failed",
         "adapter": os.environ.get("SBFLOW_ADAPTER", "postgres"),
         "source": "airflow",
