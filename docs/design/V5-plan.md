@@ -61,10 +61,14 @@ R7.2 (dup-safe), and broader R2.3/R2.4 coverage.
    `verifying` jobs at brain startup; the worker claim query re-claims
    expired-lease jobs; ephemeral sandbox containers are labelled `sbflow.sandbox`
    and swept on worker startup. (brain reconcile test + worker re-claim tests.)
-3. `needs_prod_action` rule + recommendation rendering (no prod write). — *not in
-   this slice's durability half.*
-4. Airflow snippet + dbt hook + `sbflow run -- <cmd>` wrapper. — *onboarding half.*
-5. `sbflow init` onboarding flow + config file. — *onboarding half.*
+3. `needs_prod_action` rule + recommendation rendering (no prod write). — *todo
+   (Wave 2, with the classifier).*
+4. **[done]** Airflow snippet + dbt hook + `sbflow run -- <cmd>` wrapper. — shipped
+   `snippets/` (Airflow `on_failure_callback` + a dbt `on-run-end` macro) and the
+   `sbflow run -- <cmd>` cron wrapper (`sbflow_worker.cli`).
+5. **[done]** `sbflow init` onboarding flow + config file. — interactive init that
+   requests only read-only / PR-scoped secrets; writes `~/.config/sbflow/config.toml`
+   (`0600`).
 6. **[done, safe subset]** `LISTEN/NOTIFY` + warm worker pool + warm sandbox;
    re-measure p50 ≤ ~90s. — Brain `NOTIFY sbflow_jobs` on in-scope enqueue; the
    worker `LISTEN`s and wakes immediately (poll retained as the durable
@@ -77,7 +81,38 @@ R7.2 (dup-safe), and broader R2.3/R2.4 coverage.
    optimizations unnecessary to hit the ~90s bar and the latter risks the
    ephemeral `--rm` isolation invariant. Left for a future pass if throughput
    (not latency) becomes the constraint.
-7. Expand classifier patterns; keep **unknown → drop** default. — *onboarding half.*
+7. Expand classifier patterns; keep **unknown → drop** default. — *todo (Wave 2,
+   with `needs_prod_action`).*
+
+### Delivered — onboarding & detection ergonomics (tasks 4 & 5)
+
+A new pure-stdlib **`sbflow` CLI** ships with the worker (console-script
+`sbflow` → `sbflow_worker.cli:main`; no DB/LLM/Docker imports):
+
+- **`sbflow run -- <cmd>`** — the cron/script fallback detector. Streams the
+  command's output, passes its exit code through, and POSTs the frozen
+  `Failure` (`source: "cli"`) **only** on non-zero exit. For dbt it lifts the
+  failed node's `unique_id`/`message` out of `target/run_results.json` into
+  `node_uid`/`error_text` and records it as `run_results_ref`; otherwise it
+  falls back to the tail of the command's output.
+- **`sbflow init`** — the one-minute onboarding flow. Prompts for
+  repo/webhook/adapter and the OPTIONAL secrets (read-only + PR-scoped git
+  token, optional LLM key — blank keeps keyless `replay`, optional read-only
+  dev/sample warehouse DSN), then writes a **TOML** config (default
+  `~/.config/sbflow/config.toml`, `0600`). Config resolution:
+  `--config` > `$SBFLOW_CONFIG` > `./sbflow.toml` > `~/.config/sbflow/config.toml`;
+  `SBFLOW_REPO`/`SBFLOW_WEBHOOK_URL`/`SBFLOW_ADAPTER` override per call.
+- **Shipped snippets (`snippets/`)** — promoted, documented Airflow
+  `on_failure_callback`; a dbt `on-run-end` macro that surfaces failed nodes
+  (POST happens on the wrapper, since dbt hooks can't make HTTP calls); and a
+  README with the one-line enrollment for each path.
+
+**Trust posture (R6.1):** `sbflow init` only ever requests read-only /
+PR-scoped credentials — never a prod-write credential; tier-2 targets a
+dev/sample schema only. A unit test asserts no prompt mentions prod/write/admin.
+
+Tests (fast/no-infra lane): `worker/tests/test_cli_run.py`,
+`worker/tests/test_cli_init.py`.
 
 ## Tests (PRD Seam 2 completion + Seam 1 edge)
 - A job survives a simulated brain restart mid-run and resumes (R7.1, story 26).

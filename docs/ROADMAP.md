@@ -66,9 +66,9 @@ recommendations), one-command onboarding, and the ~90s latency mechanisms.
 - Crash recovery: reconcile + lease re-claim + orphan-container cleanup (story 26, R7.1) — *done*
 - PR-opener dedupe gap closed: claim with `FOR UPDATE SKIP LOCKED` + `pr_claimed_at` (concurrency/crash safe) — *done*
 - Latency tuning: `LISTEN/NOTIFY` fast dispatch + pre-baked sandbox; measured hero p50 ≈ 10.6s heal / 12.1s to PR (≪ 90s, R5.6) — *done* (warm worker pool / long-lived warm container deferred — see V5-plan)
+- Detection ergonomics: Airflow callback + dbt hook + `sbflow run --` cron wrapper — *done*
+- `sbflow init` onboarding flow + config file — *done*
 - `needs_prod_action` rule (incremental + non-rename drift) — *todo*
-- Detection ergonomics: Airflow callback + dbt hook + `sbflow run --` cron wrapper — *todo*
-- `sbflow init` onboarding flow + config file — *todo*
 - Classifier pattern expansion (Postgres/Snowflake/BigQuery) — *todo*
 
 ## Ongoing (cross-cutting, no milestone)
@@ -106,8 +106,8 @@ The externally-shipped GitHub Pages landing site.
 | | Count |
 |---|---|
 | Epics | 8 (5 milestones + 3 Ongoing) |
-| Stories done | 37 |
-| Stories todo | 15 |
+| Stories done | 39 |
+| Stories todo | 13 |
 | Stories in progress | 0 |
 | **Total stories** | **52** |
 
