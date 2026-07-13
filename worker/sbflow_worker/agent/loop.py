@@ -8,12 +8,20 @@ labels it *unverified* until V3).
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from ..llm.base import LlmProvider, ToolSpec
 from .diffing import changed_line_count
+from .prodaction import drift_requires_prod_action
 from .score import ScoreSignals, score
 from .tools import TOOL_SPECS, AgentContext, dispatch
+
+#: First `source('schema', 'table')` reference in a model — the upstream whose
+#: current columns tell a removal from a rename in the `needs_prod_action` rule.
+_SOURCE_REF_RE = re.compile(
+    r"""source\(\s*['"]([^'"]+)['"]\s*,\s*['"]([^'"]+)['"]\s*\)""", re.IGNORECASE
+)
 
 SYSTEM_PROMPT = """\
 You are a careful data engineer fixing a failed dbt model. The failure is either
@@ -108,6 +116,24 @@ def run_repair(
             )
         messages.append({"role": "user", "content": results})
 
+    # N13 `needs_prod_action` gate (V5): before proposing ANY fix, check whether
+    # the drift is one that must not be healed by a silent code edit — an
+    # incremental model hit by a column removal/retype. If so, emit a
+    # recommendation and drop any drafted diff: the fix is never proposed as a
+    # PR, and the system never assumes a prod migration happened.
+    recommendation = _detect_prod_action(ctx, task)
+    if recommendation is not None:
+        transcript.append(
+            "needs_prod_action: incremental model + non-rename drift → "
+            "recommending a prod action instead of a code fix"
+        )
+        return {
+            "outcome": "needs_prod_action",
+            "explanation": recommendation,
+            "transcript": transcript,
+            "evidence": None,
+        }
+
     diff = ctx.working.full_diff()
     if not diff:
         return {
@@ -135,6 +161,47 @@ def run_repair(
     # V3: verify the drafted diff (reusing the model's `run_sandbox` result when
     # the diff is unchanged), then apply the compile gate + score.
     return _verify_and_gate(ctx, diff, explanation, transcript, edit_attempts)
+
+
+def _detect_prod_action(ctx: AgentContext, task: dict[str, Any]) -> str | None:
+    """Return a prod-action recommendation for this drift, or None.
+
+    Reads the failing model source (read-only) to test for `incremental`, and —
+    for a missing-column drift — the current upstream columns (read-only
+    warehouse) to tell a removal from a rename. Any lookup failure degrades to
+    "no recommendation" (the normal fix path, whose compile gate still protects).
+    """
+    failing_file = task.get("failing_file")
+    if not failing_file:
+        return None
+    try:
+        model_source = ctx.source.read(failing_file)
+    except (FileNotFoundError, ValueError, OSError):
+        return None
+
+    error_text = task.get("error_text") or ""
+    node_uid = task.get("node_uid") or ""
+    current_columns = _current_upstream_columns(ctx, model_source)
+    return drift_requires_prod_action(
+        model_source=model_source,
+        error_text=error_text,
+        node_uid=node_uid,
+        current_columns=current_columns,
+    )
+
+
+def _current_upstream_columns(ctx: AgentContext, model_source: str) -> list[str] | None:
+    """Current columns of the model's first `source()` (read-only), or None."""
+    if ctx.warehouse is None:
+        return None
+    m = _SOURCE_REF_RE.search(model_source)
+    if not m:
+        return None
+    source_name = f"{m.group(1)}.{m.group(2)}"
+    try:
+        return ctx.warehouse.column_names(source_name)
+    except Exception:  # warehouse unreachable / table gone — leave it to the fix path
+        return None
 
 
 def _verify_and_gate(

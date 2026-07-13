@@ -48,6 +48,19 @@ class WarehouseSchema:
             lines.append(f"  - {r['column_name']} {r['data_type']} {null}")
         return "\n".join(lines)
 
+    def column_names(self, source: str) -> list[str]:
+        """The current upstream column names for a source table (read-only).
+
+        Used by the `needs_prod_action` rule to tell a removal (no similar
+        replacement) from a rename. Returns ``[]`` if the table is gone.
+        """
+        schema, table = _parse_source(source)
+        with psycopg.connect(
+            self.warehouse_url, row_factory=dict_row, autocommit=True
+        ) as conn:
+            rows = conn.execute(_QUERY, (schema, table)).fetchall()
+        return [r["column_name"] for r in rows]
+
 
 def _parse_source(source: str) -> tuple[str, str]:
     parts = [p for p in source.split(".") if p]
