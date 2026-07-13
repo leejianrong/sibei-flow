@@ -23,7 +23,8 @@ pub async fn list_runs(
     let rows = sqlx::query_as::<_, JobRow>(
         r#"
         SELECT id, idem_key, repo, run_id, task_id, node_uid, failure_class,
-               payload, state, lease_expires_at, result, created_at, updated_at
+               payload, state, lease_expires_at, result,
+               pr_url, pr_branch, pr_opened_at, created_at, updated_at
         FROM repair_jobs
         ORDER BY created_at DESC
         LIMIT 200
@@ -45,7 +46,8 @@ pub async fn get_run(
     let row = sqlx::query_as::<_, JobRow>(
         r#"
         SELECT id, idem_key, repo, run_id, task_id, node_uid, failure_class,
-               payload, state, lease_expires_at, result, created_at, updated_at
+               payload, state, lease_expires_at, result,
+               pr_url, pr_branch, pr_opened_at, created_at, updated_at
         FROM repair_jobs
         WHERE id = $1
         "#,

@@ -28,6 +28,17 @@ async fn main() -> anyhow::Result<()> {
         .context("running migrations")?;
     tracing::info!("migrations applied");
 
+    // V4: the PR opener. Runs only when a git host is configured (GIT_HOST);
+    // otherwise the brain stays read-only-plus-enqueue as in V1–V3.
+    match brain::pr::PrOpenerConfig::from_env() {
+        Some(pr_cfg) => {
+            if let Err(e) = brain::pr::spawn(pool.clone(), pr_cfg) {
+                tracing::error!(error = %e, "PR opener failed to start; continuing without it");
+            }
+        }
+        None => tracing::info!("PR opener disabled (set GIT_HOST=offline|github to enable)"),
+    }
+
     let listener = TcpListener::bind(&cfg.bind_addr)
         .await
         .with_context(|| format!("binding {}", cfg.bind_addr))?;
