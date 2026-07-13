@@ -64,11 +64,10 @@ async fn in_scope_payload_creates_one_queued_job(pool: PgPool) {
     assert_eq!(ack["dispatched"], true);
 
     // Exactly one queued row exists — the durable dispatch.
-    let queued: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM repair_jobs WHERE state = 'queued'")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+    let queued: i64 = sqlx::query_scalar("SELECT count(*) FROM repair_jobs WHERE state = 'queued'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
     assert_eq!(queued, 1);
 
     // And it surfaces in the dashboard history with no outcome yet.
@@ -106,11 +105,10 @@ async fn out_of_scope_payload_is_recorded_not_dispatched(pool: PgPool) {
     assert_eq!(ack["dispatched"], false);
 
     // Nothing was enqueued for a worker.
-    let queued: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM repair_jobs WHERE state = 'queued'")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+    let queued: i64 = sqlx::query_scalar("SELECT count(*) FROM repair_jobs WHERE state = 'queued'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
     assert_eq!(queued, 0);
 
     // It is recorded as a dropped run with outcome out_of_scope.
@@ -148,21 +146,57 @@ async fn dashboard_api_exposes_no_write_endpoints(pool: PgPool) {
 
     // GET works.
     assert_eq!(
-        client.get(format!("{base}/api/runs")).send().await.unwrap().status(),
+        client
+            .get(format!("{base}/api/runs"))
+            .send()
+            .await
+            .unwrap()
+            .status(),
         200
     );
     assert_eq!(
-        client.get(format!("{base}/api/runs/{id}")).send().await.unwrap().status(),
+        client
+            .get(format!("{base}/api/runs/{id}"))
+            .send()
+            .await
+            .unwrap()
+            .status(),
         200
     );
 
     // Every write verb against the runs API is rejected (405 Method Not Allowed).
     for status in [
-        client.post(format!("{base}/api/runs")).json(&json!({})).send().await.unwrap().status(),
-        client.put(format!("{base}/api/runs/{id}")).json(&json!({})).send().await.unwrap().status(),
-        client.delete(format!("{base}/api/runs/{id}")).send().await.unwrap().status(),
-        client.patch(format!("{base}/api/runs/{id}")).json(&json!({})).send().await.unwrap().status(),
+        client
+            .post(format!("{base}/api/runs"))
+            .json(&json!({}))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        client
+            .put(format!("{base}/api/runs/{id}"))
+            .json(&json!({}))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        client
+            .delete(format!("{base}/api/runs/{id}"))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        client
+            .patch(format!("{base}/api/runs/{id}"))
+            .json(&json!({}))
+            .send()
+            .await
+            .unwrap()
+            .status(),
     ] {
-        assert_eq!(status, 405, "write verbs must be rejected on the read-only API");
+        assert_eq!(
+            status, 405,
+            "write verbs must be rejected on the read-only API"
+        );
     }
 }

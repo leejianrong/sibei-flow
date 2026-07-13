@@ -33,7 +33,10 @@ from sbflow_worker.sandbox.runner import SandboxError, SandboxRunner
 REPO = str(Path(__file__).resolve().parents[2] / "fixtures" / "dbt_project")
 MODEL = "models/marts/orders.sql"
 RENAME_SESSION = str(
-    Path(__file__).resolve().parents[1] / "sbflow_worker" / "replays" / "rename_drift.json"
+    Path(__file__).resolve().parents[1]
+    / "sbflow_worker"
+    / "replays"
+    / "rename_drift.json"
 )
 WAREHOUSE_URL = os.environ.get(
     "WAREHOUSE_URL", "postgres://sbflow_ro:sbflow_ro@warehouse:5432/warehouse"
@@ -44,9 +47,12 @@ SAMPLE_URL = os.environ.get(
 NETWORK = os.environ.get("SANDBOX_NETWORK", "sibei-flow_default")
 WORK_DIR = os.environ.get("SANDBOX_WORK_DIR", "/tmp/sbflow-sandbox")
 
-pytestmark = pytest.mark.skipif(
-    shutil.which("docker") is None, reason="docker CLI not available"
-)
+pytestmark = [
+    pytest.mark.infra,
+    pytest.mark.skipif(
+        shutil.which("docker") is None, reason="docker CLI not available"
+    ),
+]
 
 
 def _runner(sample_url: str | None = SAMPLE_URL) -> SandboxRunner:

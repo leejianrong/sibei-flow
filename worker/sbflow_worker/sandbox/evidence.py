@@ -29,7 +29,9 @@ from ..agent.diffing import WorkingCopy
 from .runner import SandboxRun
 
 
-def build_evidence(run: SandboxRun, working: WorkingCopy, model_path: str) -> dict[str, Any]:
+def build_evidence(
+    run: SandboxRun, working: WorkingCopy, model_path: str
+) -> dict[str, Any]:
     changed, detail = output_schema_delta(working, model_path)
     return {
         "tier1": {
@@ -46,7 +48,9 @@ def build_evidence(run: SandboxRun, working: WorkingCopy, model_path: str) -> di
     }
 
 
-def output_schema_delta(working: WorkingCopy, model_path: str) -> tuple[bool | None, str]:
+def output_schema_delta(
+    working: WorkingCopy, model_path: str
+) -> tuple[bool | None, str]:
     """Compare the model's output columns before vs after the edit.
 
     Returns ``(changed, detail)`` where ``changed`` is ``None`` when the output

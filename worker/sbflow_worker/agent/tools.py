@@ -120,7 +120,9 @@ class AgentContext:
             return "get_schema: no read-only warehouse connection configured", True
         return self.warehouse.describe(source), False
 
-    def edit_file(self, path: str, old_string: str, new_string: str) -> tuple[str, bool]:
+    def edit_file(
+        self, path: str, old_string: str, new_string: str
+    ) -> tuple[str, bool]:
         if not self.working.has(path):
             try:
                 self.working.load(path, self.source.read(path))
@@ -198,7 +200,9 @@ def _summarize_run(run: "SandboxRun") -> str:
         lines.append("  " + run.tier1.log.splitlines()[-1] if run.tier1.log else "")
     if run.tier2.ran:
         t2 = "PASSED" if run.tier2.passed else "FAILED"
-        lines.append(f"  tier-2 dbt build (sample): {t2} (node status: {run.tier2.node_status})")
+        lines.append(
+            f"  tier-2 dbt build (sample): {t2} (node status: {run.tier2.node_status})"
+        )
     else:
         lines.append(f"  tier-2 dbt build (sample): NOT RUN — {run.tier2.log}")
     return "\n".join(x for x in lines if x)

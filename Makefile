@@ -36,7 +36,7 @@ SANDBOX_WORK  := /tmp/sbflow-sandbox
 
 .DEFAULT_GOAL := help
 .PHONY: help up up-build build sandbox down clean ps logs logs-brain logs-worker \
-        demo psql psql-warehouse test test-brain test-worker
+        demo psql psql-warehouse test test-fast lint typecheck test-brain test-worker
 
 help: ## List available targets
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -85,6 +85,18 @@ psql-warehouse: ## Open psql against the fixture warehouse
 
 # --- tests (run in throwaway containers on the compose network) ------------
 test: test-brain test-worker ## Run both test suites
+
+# The fast, no-infra lane: the pure-logic worker tests (diff guard + score
+# rubric). No Postgres/warehouse/Docker, so it runs pytest directly against a
+# local uv env — the pre-push gate. `-m "not infra"` deselects the infra layer.
+test-fast: ## Fast pre-push gate: no-infra worker tests (no DB/warehouse/Docker)
+	cd worker && uv sync --extra dev && uv run pytest -m "not infra"
+
+lint: ## Lint the worker (ruff) — non-mutating check
+	cd worker && uvx ruff@0.8.4 check .
+
+typecheck: ## Type-check the worker (mypy) — ADVISORY until pre-existing errors are cleared
+	cd worker && uv run --with mypy mypy sbflow_worker || true
 
 test-brain: ## Seam-2 + unit tests (Rust, throwaway DB per test)
 	$(COMPOSE) up -d postgres

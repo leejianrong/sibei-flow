@@ -1,0 +1,111 @@
+# =====================================================================
+# .pre-commit-config.yaml — sibei-flow local git gates
+# Track B: cards #128 (hooks) + #166 (gitleaks, pre-commit half).
+#
+# Install (one-time, per clone):
+#   pipx install pre-commit          # or: uvx pre-commit / uv tool install pre-commit
+#   pre-commit install               # wire the commit-stage hooks
+#   pre-commit install -t pre-push   # wire the pre-push gate
+#
+# One-off sweep over the whole tree:
+#   pre-commit run --all-files
+#
+# Emergency bypass only (treat as debt to repay): git commit --no-verify
+#
+# Layering (see .claude/skills/dev-guardrails/references/git-hooks.md):
+#   pre-commit = FAST: hygiene + ruff (worker/) + gitleaks + cargo fmt --check (brain/)
+#   pre-push   = fast local gate: ruff check + cargo fmt --check
+#                (+ `uv run pytest -m "not infra"` once markers land — see below)
+#
+# NOTE on cargo: this repo has no guaranteed local Rust toolchain — tests run in
+# throwaway containers (see Makefile), so cargo may only exist inside the brain
+# container. The cargo fmt hooks below are `language: system` and assume `cargo`
+# is on your PATH. If it is not installed locally the hook will fail on your
+# machine; CI (Track A) is the authoritative Rust gate. If you have no local
+# toolchain, skip it with:  SKIP=cargo-fmt-check git commit ...
+# =====================================================================
+minimum_pre_commit_version: "3.5.0"
+
+repos:
+  # --- generic hygiene (commit stage) ---------------------------------
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-added-large-files
+      - id: check-merge-conflict
+
+  # --- Python: ruff lint + format, scoped to worker/ (commit stage) ---
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.8.4
+    hooks:
+      - id: ruff            # lint (autofix) worker/
+        args: [--fix]
+        files: ^worker/
+      - id: ruff-format     # format worker/
+        files: ^worker/
+
+  # --- secret scanning: card #166 (pre-commit half) -------------------
+  # Official gitleaks pre-commit hook with default rules (no config file needed).
+  # The CI half of #166 is owned by another agent (Track A).
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.21.2
+    hooks:
+      - id: gitleaks        # block committed secrets
+
+  # --- Python type check: mypy (manual stage, ADVISORY) ---------------
+  # Runs via the project env (uv run --with) so imports resolve. Kept on the
+  # `manual` stage — NOT commit/push — because ~11 pre-existing type errors
+  # would otherwise block every commit. Run on demand:
+  #   pre-commit run mypy --hook-stage manual --all-files   (or `make typecheck`)
+  # Move `stages` to [pre-push] once the backlog card clears the errors.
+  - repo: local
+    hooks:
+      - id: mypy
+        name: mypy (worker/) [advisory, manual]
+        entry: bash -c 'cd worker && uv run --with mypy mypy sbflow_worker'
+        language: system
+        pass_filenames: false
+        stages: [manual]
+
+  # --- Rust format check, scoped to brain/ (commit stage) -------------
+  # local `system` hook — see the "NOTE on cargo" block above re: availability.
+  - repo: local
+    hooks:
+      - id: cargo-fmt-check
+        name: cargo fmt --check (brain/)
+        entry: cargo fmt --check --manifest-path brain/Cargo.toml
+        language: system
+        types: [rust]
+        pass_filenames: false
+        stages: [pre-commit]
+
+  # --- pre-push fast gate --------------------------------------------
+  # Runs on `git push`, not every commit. Non-mutating checks only.
+  # Safe today: ruff check (worker/) + cargo fmt --check (brain/).
+  - repo: local
+    hooks:
+      - id: ruff-check-push
+        name: ruff check (worker/) [pre-push]
+        entry: uvx ruff check worker/
+        language: system
+        pass_filenames: false
+        stages: [pre-push]
+
+      - id: cargo-fmt-check-push
+        name: cargo fmt --check (brain/) [pre-push]
+        entry: cargo fmt --check --manifest-path brain/Cargo.toml
+        language: system
+        pass_filenames: false
+        stages: [pre-push]
+
+      # The `-m "not infra"` pytest markers have landed (Track C), so the fast,
+      # no-infra test lane runs on push:
+      - id: pytest-fast
+        name: pytest -m "not infra" (worker/) [pre-push]
+        entry: bash -c 'cd worker && uv run pytest -m "not infra"'
+        language: system
+        pass_filenames: false
+        stages: [pre-push]

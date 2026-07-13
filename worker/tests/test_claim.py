@@ -19,6 +19,9 @@ from psycopg.types.json import Json
 
 from sbflow_worker.claim import claim_and_process
 
+# Needs a reachable Postgres (DATABASE_URL). Deselect with `-m "not infra"`.
+pytestmark = pytest.mark.infra
+
 # These tests cover the claim MECHANICS (SKIP LOCKED, lease, write-back) in
 # isolation from the agent, so they inject a trivial processor. The agent loop
 # itself is covered by test_agent_loop.py.
@@ -44,7 +47,7 @@ def conn():
     c.close()
 
 
-def _insert_queued(conn, error_text="column \"x\" does not exist") -> uuid.UUID:
+def _insert_queued(conn, error_text='column "x" does not exist') -> uuid.UUID:
     job_id = uuid.uuid4()
     with conn.transaction():
         conn.execute(

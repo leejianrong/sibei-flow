@@ -23,6 +23,10 @@ def connect_with_retry(
             return connect(database_url)
         except psycopg.OperationalError as e:  # not ready yet
             last = e
-            print(f"[worker] postgres not ready (attempt {i}/{attempts}): {e}", flush=True)
+            print(
+                f"[worker] postgres not ready (attempt {i}/{attempts}): {e}", flush=True
+            )
             time.sleep(delay)
-    raise RuntimeError(f"could not connect to postgres after {attempts} attempts: {last}")
+    raise RuntimeError(
+        f"could not connect to postgres after {attempts} attempts: {last}"
+    )

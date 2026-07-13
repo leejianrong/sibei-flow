@@ -117,14 +117,12 @@ fn normalize(body: &serde_json::Value) -> Failure {
 
     Failure {
         repo: str_field(body, &["repo"]).unwrap_or_else(|| "unknown".to_string()),
-        run_id: str_field(body, &["run_id", "dag_run_id", "invocation_id"])
-            .unwrap_or_default(),
+        run_id: str_field(body, &["run_id", "dag_run_id", "invocation_id"]).unwrap_or_default(),
         task_id: str_field(body, &["task_id"]).unwrap_or_default(),
         node_uid: str_field(body, &["node_uid", "unique_id"])
             .or_else(|| str_field(body, &["task_id"]))
             .unwrap_or_default(),
-        error_text: str_field(body, &["error_text", "exception", "message"])
-            .unwrap_or_default(),
+        error_text: str_field(body, &["error_text", "exception", "message"]).unwrap_or_default(),
         adapter: str_field(body, &["adapter"]).unwrap_or_else(|| "postgres".to_string()),
         run_results_ref: str_field(body, &["run_results_ref"]),
         source,

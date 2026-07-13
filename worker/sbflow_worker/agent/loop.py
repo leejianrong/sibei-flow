@@ -58,7 +58,10 @@ def run_repair(
     """Run the bounded loop and return a RepairResult dict."""
     tools = tools or TOOL_SPECS
     messages: list[dict[str, Any]] = [
-        {"role": "user", "content": [{"type": "text", "text": build_initial_prompt(task)}]}
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": build_initial_prompt(task)}],
+        }
     ]
     transcript: list[str] = []
     last_text = ""
@@ -89,7 +92,11 @@ def run_repair(
                 edit_attempts += 1
             transcript.append(f"→ {tc.name}({tc.input})")
             content, is_error = dispatch(ctx, tc)
-            clipped = content if len(content) <= _TRANSCRIPT_CLIP else content[:_TRANSCRIPT_CLIP] + " …[clipped]"
+            clipped = (
+                content
+                if len(content) <= _TRANSCRIPT_CLIP
+                else content[:_TRANSCRIPT_CLIP] + " …[clipped]"
+            )
             transcript.append(f"  {'ERROR' if is_error else 'result'}: {clipped}")
             results.append(
                 {

@@ -26,5 +26,22 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["sbflow_worker"]
 
+[tool.mypy]
+files = ["sbflow_worker"]
+python_version = "3.12"
+# Third-party SDKs (anthropic/openai/psycopg) drive most of the remaining
+# friction; silence missing stubs but keep our own code checked.
+ignore_missing_imports = true
+# ADVISORY FIRST: ~11 pre-existing errors across the worker (psycopg row typing,
+# LLM SDK overloads). mypy runs non-blocking in CI + `make typecheck` until those
+# are cleared, then it graduates to a blocking gate. See the backlog card.
+warn_unused_ignores = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# --strict-markers turns an unregistered marker into an error, so the fast/infra
+# split can't silently drift. Every marker used must be declared below.
+addopts = "--strict-markers"
+markers = [
+    "infra: needs external infrastructure (Postgres state DB, fixture warehouse, and/or the Docker socket for the real dbt sandbox). Deselect the fast, no-infra layer with `-m \"not infra\"`.",
+]

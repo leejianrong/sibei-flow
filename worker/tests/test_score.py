@@ -61,7 +61,10 @@ def test_more_attempts_lowers_confidence_monotonically():
     one = score(FLAGSHIP)["confidence"]
     three = score(ScoreSignals(**{**vars(FLAGSHIP), "attempts": 3}))["confidence"]
     assert three < one
-    assert any("attempts" in f for f in score(ScoreSignals(**{**vars(FLAGSHIP), "attempts": 3}))["factors"])
+    assert any(
+        "attempts" in f
+        for f in score(ScoreSignals(**{**vars(FLAGSHIP), "attempts": 3}))["factors"]
+    )
 
 
 def test_reproducible():
