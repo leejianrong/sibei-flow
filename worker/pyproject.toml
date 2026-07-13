@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "sibei-flow repair worker (V1) — Postgres claim loop; agent stubbed (no LLM)"
 requires-python = ">=3.12"
 dependencies = [
-    "psycopg[binary]>=3.2",
+    "psycopg[binary]>=3.3.4",
     # LlmProvider backends (BYO-key; not needed by the replay provider at runtime
     # but installed so `claude`/`openai` are a config switch, not a rebuild).
     "anthropic>=0.40",
