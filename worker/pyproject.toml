@@ -18,6 +18,8 @@ dev = [
 
 [project.scripts]
 sbflow-worker = "sbflow_worker.main:main"
+# V5 onboarding + cron-wrapper CLI (U1/U2). Pure-stdlib; ships with the worker.
+sbflow = "sbflow_worker.cli:main"
 
 [build-system]
 requires = ["hatchling"]
