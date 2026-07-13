@@ -54,10 +54,40 @@ R7.2 (dup-safe), and broader R2.3/R2.4 coverage.
 1. Idempotency key + unique index + `ON CONFLICT` enqueue; dedup test.
 2. Brain-restart reconcile + lease-expiry re-claim + orphan-container cleanup.
 3. `needs_prod_action` rule + recommendation rendering (no prod write).
-4. Airflow snippet + dbt hook + `sbflow run -- <cmd>` wrapper.
-5. `sbflow init` onboarding flow + config file.
+4. Airflow snippet + dbt hook + `sbflow run -- <cmd>` wrapper. **[done]**
+5. `sbflow init` onboarding flow + config file. **[done]**
 6. `LISTEN/NOTIFY` + warm worker pool + warm sandbox; re-measure p50 ≤ ~90s.
 7. Expand classifier patterns; keep **unknown → drop** default.
+
+### Delivered — onboarding & detection ergonomics (tasks 4 & 5)
+
+A new pure-stdlib **`sbflow` CLI** ships with the worker (console-script
+`sbflow` → `sbflow_worker.cli:main`; no DB/LLM/Docker imports):
+
+- **`sbflow run -- <cmd>`** — the cron/script fallback detector. Streams the
+  command's output, passes its exit code through, and POSTs the frozen
+  `Failure` (`source: "cli"`) **only** on non-zero exit. For dbt it lifts the
+  failed node's `unique_id`/`message` out of `target/run_results.json` into
+  `node_uid`/`error_text` and records it as `run_results_ref`; otherwise it
+  falls back to the tail of the command's output.
+- **`sbflow init`** — the one-minute onboarding flow. Prompts for
+  repo/webhook/adapter and the OPTIONAL secrets (read-only + PR-scoped git
+  token, optional LLM key — blank keeps keyless `replay`, optional read-only
+  dev/sample warehouse DSN), then writes a **TOML** config (default
+  `~/.config/sbflow/config.toml`, `0600`). Config resolution:
+  `--config` > `$SBFLOW_CONFIG` > `./sbflow.toml` > `~/.config/sbflow/config.toml`;
+  `SBFLOW_REPO`/`SBFLOW_WEBHOOK_URL`/`SBFLOW_ADAPTER` override per call.
+- **Shipped snippets (`snippets/`)** — promoted, documented Airflow
+  `on_failure_callback`; a dbt `on-run-end` macro that surfaces failed nodes
+  (POST happens on the wrapper, since dbt hooks can't make HTTP calls); and a
+  README with the one-line enrollment for each path.
+
+**Trust posture (R6.1):** `sbflow init` only ever requests read-only /
+PR-scoped credentials — never a prod-write credential; tier-2 targets a
+dev/sample schema only. A unit test asserts no prompt mentions prod/write/admin.
+
+Tests (fast/no-infra lane): `worker/tests/test_cli_run.py`,
+`worker/tests/test_cli_init.py`.
 
 ## Tests (PRD Seam 2 completion + Seam 1 edge)
 - A job survives a simulated brain restart mid-run and resumes (R7.1, story 26).

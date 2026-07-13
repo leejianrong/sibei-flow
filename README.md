@@ -104,6 +104,51 @@ GET /  ·  GET /api/runs  ·  GET /api/runs/:id     read-only dashboard (no writ
   run against a real model, set `LLM_PROVIDER=claude` + `ANTHROPIC_API_KEY`
   (or `LLM_PROVIDER=openai` + `LLM_BASE_URL` for a local model).
 
+## Onboarding & the `sbflow` CLI
+
+Enrolling a pipeline is essentially one line: a failure POSTs the frozen
+`Failure` contract to the brain's webhook (ADR-0004) and sibei-flow takes it from
+there. The `sbflow` CLI ships with the worker (console-script `sbflow`, pure
+stdlib — no DB/LLM/Docker needed to run it):
+
+```bash
+# One-minute first-run setup. Prompts for repo / webhook / adapter and the
+# OPTIONAL secrets, then writes a TOML config (default ~/.config/sbflow/config.toml, 0600).
+sbflow init
+
+# Cron / plain-script fallback detector: streams output, passes the exit code
+# through, and POSTs a Failure (source: "cli") ONLY when the command fails.
+sbflow run -- dbt build            # or any command
+```
+
+**Trust posture (invariant R6.1):** `sbflow init` only ever asks for **read-only /
+PR-scoped** credentials — a git token that can read source and *open* PRs (never
+merge, never prod), an OPTIONAL **read-only dev/sample** warehouse DSN for tier-2
+(never prod), and an OPTIONAL LLM key (blank keeps the keyless `replay`
+provider). It never requests a prod-write credential.
+
+**Config file** — TOML. Resolution order (first hit wins): `--config PATH` →
+`$SBFLOW_CONFIG` → `./sbflow.toml` (project-local, handy in a CI/cron checkout) →
+`$XDG_CONFIG_HOME/sbflow/config.toml` (default `~/.config/sbflow/config.toml`).
+Any field can be overridden per call by `SBFLOW_REPO` / `SBFLOW_WEBHOOK_URL` /
+`SBFLOW_ADAPTER`, so containers need no file. Shape:
+
+```toml
+repo = "acme/analytics"
+webhook_url = "http://localhost:8080/webhook"
+adapter = "postgres"
+llm_provider = "replay"
+
+[secrets]                          # written 0600; only non-empty secrets appear
+git_token = "…"                    # read-only source + PR-scoped (NOT prod-write)
+sample_warehouse_url = "…"         # OPTIONAL read-only dev/sample DSN (never prod)
+```
+
+For dbt, `sbflow run -- dbt build` reads the failed node out of
+`target/run_results.json` to fill `node_uid`/`error_text`/`run_results_ref`.
+Copy-paste enrollment snippets for Airflow (`on_failure_callback`) and dbt (an
+`on-run-end` macro) live in [`snippets/`](snippets/).
+
 ## Common tasks (`make`)
 
 A root `Makefile` wraps the repeated docker/compose/test invocations:
