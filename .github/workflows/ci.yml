@@ -125,9 +125,10 @@ jobs:
         # Pinned to the pre-commit template version for local == CI parity.
         run: uvx ruff@0.8.4 check .
 
-      - name: ruff format --check (advisory)
+      - name: ruff format --check
         working-directory: worker
-        continue-on-error: true
+        # Blocking: the codebase is ruff-formatted and the pre-commit hook keeps
+        # it that way, so CI enforces the same standard (no local/CI drift).
         run: uvx ruff@0.8.4 format --check .
 
       - name: mypy (advisory)

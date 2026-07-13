@@ -73,9 +73,13 @@ def score(sig: ScoreSignals) -> dict[str, Any]:
     small = sig.changed_lines <= 15 and sig.files_touched <= 1
     if small:
         conf += _W_DIFF
-        factors.append(f"+ small diff ({sig.changed_lines} lines, {sig.files_touched} file)")
+        factors.append(
+            f"+ small diff ({sig.changed_lines} lines, {sig.files_touched} file)"
+        )
     else:
-        factors.append(f"− large/multi-file diff ({sig.changed_lines} lines, {sig.files_touched} files)")
+        factors.append(
+            f"− large/multi-file diff ({sig.changed_lines} lines, {sig.files_touched} files)"
+        )
 
     if sig.unambiguous:
         conf += _W_UNAMBIG

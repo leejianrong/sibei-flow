@@ -36,7 +36,10 @@ class DiffGuard:
         # (b) size: keep the blast radius obvious.
         n = changed_line_count(diff)
         if n > self.max_lines:
-            return False, f"diff too large ({n} lines > {self.max_lines}); keep it minimal"
+            return (
+                False,
+                f"diff too large ({n} lines > {self.max_lines}); keep it minimal",
+            )
 
         # (c) not whitespace-only churn: require a real, non-whitespace change.
         before = "".join(_norm(working, path, original=True))

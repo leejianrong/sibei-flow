@@ -84,5 +84,6 @@ class Config:
             sandbox_timeout=int(os.environ.get("SANDBOX_TIMEOUT", "120")),
             sample_warehouse_url=os.environ.get("SAMPLE_WAREHOUSE_URL") or None,
             sample_limit=int(os.environ.get("SAMPLE_LIMIT", "10000")),
-            sandbox_enabled=os.environ.get("SANDBOX_ENABLED", "1") not in ("0", "", "false"),
+            sandbox_enabled=os.environ.get("SANDBOX_ENABLED", "1")
+            not in ("0", "", "false"),
         )

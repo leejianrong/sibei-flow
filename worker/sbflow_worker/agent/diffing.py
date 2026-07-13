@@ -47,7 +47,10 @@ class WorkingCopy:
         if count == 0:
             return False, "old_string not found in file"
         if count > 1:
-            return False, f"old_string is ambiguous (matches {count} places); add more context"
+            return (
+                False,
+                f"old_string is ambiguous (matches {count} places); add more context",
+            )
         self._files[path].current = cur.replace(old, new, 1)
         return True, "ok"
 

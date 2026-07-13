@@ -141,4 +141,6 @@ def test_loop_stops_at_cap_and_returns_no_fix():
     assert result["outcome"] == "no_fix"
     assert "diff" not in result
     # Capped at 3 provider turns (3 read_file calls in the transcript).
-    assert sum(1 for line in result["transcript"] if line.startswith("→ read_file")) == 3
+    assert (
+        sum(1 for line in result["transcript"] if line.startswith("→ read_file")) == 3
+    )

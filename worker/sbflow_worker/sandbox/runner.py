@@ -103,7 +103,9 @@ class SandboxRunner:
             timeout=600,
         )
         if built.returncode != 0:
-            raise SandboxError(f"could not build sandbox image:\n{built.stderr[-2000:]}")
+            raise SandboxError(
+                f"could not build sandbox image:\n{built.stderr[-2000:]}"
+            )
         self._image_ready = True
 
     # -- verification -------------------------------------------------------
@@ -120,7 +122,9 @@ class SandboxRunner:
                 tier2 = self._tier2(proj, prof, select)
             elif self.sample_url:
                 # tier-1 failed: no point building, but disclose tier-2 as not run.
-                tier2 = TierResult(ran=False, passed=None, log="skipped: tier-1 did not pass")
+                tier2 = TierResult(
+                    ran=False, passed=None, log="skipped: tier-1 did not pass"
+                )
             else:
                 tier2 = TierResult(
                     ran=False, passed=None, log="sample/dev connection not configured"
@@ -183,8 +187,14 @@ class SandboxRunner:
             proj,
             prof,
             [
-                "dbt", "build", "--select", select, "--target", "sample",
-                "--vars", json.dumps({"sample_limit": self.sample_limit}),
+                "dbt",
+                "build",
+                "--select",
+                select,
+                "--target",
+                "sample",
+                "--vars",
+                json.dumps({"sample_limit": self.sample_limit}),
             ],
         )
         status = _node_status(proj, select)
@@ -199,10 +209,17 @@ class SandboxRunner:
         self, proj: Path, prof: Path, cmd: list[str]
     ) -> subprocess.CompletedProcess[str]:
         args = [
-            "docker", "run", "--rm",
-            "--memory", "1g", "--cpus", "2",
-            "-v", f"{proj}:/project",
-            "-v", f"{prof}:/profiles",
+            "docker",
+            "run",
+            "--rm",
+            "--memory",
+            "1g",
+            "--cpus",
+            "2",
+            "-v",
+            f"{proj}:/project",
+            "-v",
+            f"{prof}:/profiles",
         ]
         if self.network:
             args += ["--network", self.network]
@@ -213,7 +230,10 @@ class SandboxRunner:
             )
         except subprocess.TimeoutExpired as e:
             return subprocess.CompletedProcess(
-                args, returncode=124, stdout=e.stdout or "", stderr=f"sandbox timed out after {self.timeout}s"
+                args,
+                returncode=124,
+                stdout=e.stdout or "",
+                stderr=f"sandbox timed out after {self.timeout}s",
             )
         except FileNotFoundError as e:  # docker CLI not present
             raise SandboxError(f"docker CLI unavailable in worker: {e}") from e

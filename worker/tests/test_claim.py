@@ -47,7 +47,7 @@ def conn():
     c.close()
 
 
-def _insert_queued(conn, error_text="column \"x\" does not exist") -> uuid.UUID:
+def _insert_queued(conn, error_text='column "x" does not exist') -> uuid.UUID:
     job_id = uuid.uuid4()
     with conn.transaction():
         conn.execute(

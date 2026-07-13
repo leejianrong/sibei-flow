@@ -16,13 +16,17 @@ from .config import Config
 from .db import connect_with_retry
 
 
-def wait_for_schema(conn: psycopg.Connection, attempts: int = 60, delay: float = 1.0) -> None:
+def wait_for_schema(
+    conn: psycopg.Connection, attempts: int = 60, delay: float = 1.0
+) -> None:
     """Block until the brain has applied its migration (the table exists).
 
     The brain owns the schema (ADR-0009); the worker just waits for it.
     """
     for i in range(1, attempts + 1):
-        exists = conn.execute("SELECT to_regclass('repair_jobs') IS NOT NULL").fetchone()
+        exists = conn.execute(
+            "SELECT to_regclass('repair_jobs') IS NOT NULL"
+        ).fetchone()
         conn.rollback()  # close the read txn (autocommit is off)
         if exists and next(iter(exists.values())):
             return
@@ -41,8 +45,11 @@ def _prewarm_sandbox(cfg: Config) -> None:
         runner.ensure_image()
         print(f"[worker] sandbox image ready: {cfg.sandbox_image}", flush=True)
     except SandboxError as e:
-        print(f"[worker] WARNING: sandbox image not ready ({e}); "
-              "jobs will fail verification until it is available", flush=True)
+        print(
+            f"[worker] WARNING: sandbox image not ready ({e}); "
+            "jobs will fail verification until it is available",
+            flush=True,
+        )
 
 
 def main() -> None:
