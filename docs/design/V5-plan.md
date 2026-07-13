@@ -51,13 +51,33 @@ R7.2 (dup-safe), and broader R2.3/R2.4 coverage.
   BigQuery) for schema-drift and code/SQL coverage.
 
 ## Tasks
-1. Idempotency key + unique index + `ON CONFLICT` enqueue; dedup test.
-2. Brain-restart reconcile + lease-expiry re-claim + orphan-container cleanup.
-3. `needs_prod_action` rule + recommendation rendering (no prod write).
-4. Airflow snippet + dbt hook + `sbflow run -- <cmd>` wrapper.
-5. `sbflow init` onboarding flow + config file.
-6. `LISTEN/NOTIFY` + warm worker pool + warm sandbox; re-measure p50 ≤ ~90s.
-7. Expand classifier patterns; keep **unknown → drop** default.
+1. **[done]** Idempotency key + unique index + `ON CONFLICT` enqueue; dedup test.
+   — `idem_key` promoted to a UNIQUE partial index (migration `0003_dedup.sql`);
+   enqueue is `INSERT … ON CONFLICT (idem_key) DO NOTHING RETURNING id`; a
+   re-delivery returns the existing job flagged `deduplicated`. (seam2 test +
+   live-verified.)
+2. **[done]** Brain-restart reconcile + lease-expiry re-claim + orphan-container
+   cleanup. — `reconcile_orphaned_jobs` requeues expired-lease `claimed`/
+   `verifying` jobs at brain startup; the worker claim query re-claims
+   expired-lease jobs; ephemeral sandbox containers are labelled `sbflow.sandbox`
+   and swept on worker startup. (brain reconcile test + worker re-claim tests.)
+3. `needs_prod_action` rule + recommendation rendering (no prod write). — *not in
+   this slice's durability half.*
+4. Airflow snippet + dbt hook + `sbflow run -- <cmd>` wrapper. — *onboarding half.*
+5. `sbflow init` onboarding flow + config file. — *onboarding half.*
+6. **[done, safe subset]** `LISTEN/NOTIFY` + warm worker pool + warm sandbox;
+   re-measure p50 ≤ ~90s. — Brain `NOTIFY sbflow_jobs` on in-scope enqueue; the
+   worker `LISTEN`s and wakes immediately (poll retained as the durable
+   fallback). The sandbox image is pre-baked at startup (`_prewarm_sandbox`).
+   **Measured hero p50 ≈ 10.6s** enqueue→`pr_proposed`, **≈ 12.1s** to a recorded
+   PR (n=7; ≪ 90s). The heal time is dominated by the agent loop + `dbt compile`
+   (~10s), not queue latency, so `LISTEN/NOTIFY` (removing the ≤2s poll wait) is
+   the meaningful lever. **Deferred:** a multi-process *warm worker pool* and a
+   *long-lived warm sandbox container* — both are throughput/cold-start
+   optimizations unnecessary to hit the ~90s bar and the latter risks the
+   ephemeral `--rm` isolation invariant. Left for a future pass if throughput
+   (not latency) becomes the constraint.
+7. Expand classifier patterns; keep **unknown → drop** default. — *onboarding half.*
 
 ## Tests (PRD Seam 2 completion + Seam 1 edge)
 - A job survives a simulated brain restart mid-run and resumes (R7.1, story 26).

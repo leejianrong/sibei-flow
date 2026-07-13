@@ -59,16 +59,17 @@ evidence; the merge is the sole path to prod.
   `docker compose --profile hero` stack + `make hero` / `hero-break`; the live
   loop heals real warehouse drift and opens the PR end to end).
 
-### M5: Hardening & Onboarding (V5) — *todo*
+### M5: Hardening & Onboarding (V5) — *in progress*
 Production-trust properties (durability, dedup, honest prod-action
 recommendations), one-command onboarding, and the ~90s latency mechanisms.
-- Dedupe: idempotency key + unique index + `ON CONFLICT DO NOTHING`
-- Crash recovery: reconcile + lease re-claim + orphan-container cleanup
-- `needs_prod_action` rule (incremental + non-rename drift)
-- Detection ergonomics: Airflow callback + dbt hook + `sbflow run --` cron wrapper
-- `sbflow init` onboarding flow + config file
-- Latency tuning: `LISTEN/NOTIFY` + warm worker pool + warm sandbox
-- Classifier pattern expansion (Postgres/Snowflake/BigQuery)
+- Dedupe: idempotency key + unique index + `ON CONFLICT DO NOTHING` (story 27, R7.2) — *done*
+- Crash recovery: reconcile + lease re-claim + orphan-container cleanup (story 26, R7.1) — *done*
+- PR-opener dedupe gap closed: claim with `FOR UPDATE SKIP LOCKED` + `pr_claimed_at` (concurrency/crash safe) — *done*
+- Latency tuning: `LISTEN/NOTIFY` fast dispatch + pre-baked sandbox; measured hero p50 ≈ 10.6s heal / 12.1s to PR (≪ 90s, R5.6) — *done* (warm worker pool / long-lived warm container deferred — see V5-plan)
+- `needs_prod_action` rule (incremental + non-rename drift) — *todo*
+- Detection ergonomics: Airflow callback + dbt hook + `sbflow run --` cron wrapper — *todo*
+- `sbflow init` onboarding flow + config file — *todo*
+- Classifier pattern expansion (Postgres/Snowflake/BigQuery) — *todo*
 
 ## Ongoing (cross-cutting, no milestone)
 
