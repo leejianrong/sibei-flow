@@ -1,13 +1,13 @@
-# Minimal fixture dbt project (illustrative for V1).
+# The hero analytics dbt project (also the V3 sandbox fixture).
 #
-# V1 does not execute dbt — it proves the durable spine from a failure payload.
-# This project shows the *shape* of the flagship failure: the `orders` model
-# references `customer_id`, which has been renamed upstream to `customer_key`,
-# so a real `dbt build` would emit:  column "customer_id" does not exist.
+# This project shows the flagship failure: the `orders` mart references
+# `customer_id`, which drifts upstream to `cust_id`, so a real `dbt build` emits:
+#   column "customer_id" does not exist.
 # That is exactly the error in ../schema_drift_failure.json.
 #
-# From V3+ this project is compiled/run inside the sandbox; for now it is the
-# canned source of the demo failure.
+# From V3+ it is compiled/run inside the verification sandbox; from the Seam-3
+# hero pipeline (docs/design/HERO-PIPELINE.md) it is also the live dbt project
+# the `analytics_daily` Airflow DAG runs against the warehouse.
 
 name: analytics
 version: "1.0.0"
@@ -18,5 +18,7 @@ model-paths: ["models"]
 
 models:
   analytics:
+    staging:
+      +materialized: view
     marts:
       +materialized: view
