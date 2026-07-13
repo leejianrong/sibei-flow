@@ -17,11 +17,18 @@ from psycopg.types.json import Json
 #: A processor turns a claimed job into a RepairResult dict.
 Processor = Callable[[dict[str, Any]], dict[str, Any]]
 
+# Crash recovery (V5 task 2, R7.1): a job is claimable when it is freshly
+# `queued`, OR when it is stuck in a non-terminal working state (`claimed` /
+# `verifying`) whose lease has expired — i.e. the worker that held it died
+# without writing a result. Re-claiming an expired lease lets another worker
+# resume the run. `FOR UPDATE SKIP LOCKED` still guarantees exactly one worker
+# takes any given row. Repair jobs are idempotent/re-runnable (ADR-0009), so a
+# resumed job is safe.
 _CLAIM_SQL = """
     SELECT id, payload, failure_class
     FROM repair_jobs
-    WHERE state = 'queued'
-      AND (lease_expires_at IS NULL OR lease_expires_at < now())
+    WHERE (state = 'queued'
+           OR (state IN ('claimed', 'verifying') AND lease_expires_at < now()))
     ORDER BY created_at
     FOR UPDATE SKIP LOCKED
     LIMIT 1

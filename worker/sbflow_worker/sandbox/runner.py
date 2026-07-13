@@ -37,6 +37,44 @@ from ..agent.diffing import WorkingCopy
 # project-local profiles.yml — the sandbox mounts its own generated one).
 _SKIP = {".git", "target", "dbt_packages", "logs", "__pycache__", "profiles.yml"}
 
+# Every ephemeral sandbox container carries this label so a crashed worker's
+# leftovers can be swept on the next startup (V5 task 2, orphan cleanup).
+SANDBOX_LABEL = "sbflow.sandbox=1"
+
+
+def cleanup_orphans() -> int:
+    """Remove orphaned ephemeral sandbox containers left by a crashed worker.
+
+    Containers are launched ``--rm`` so a clean run leaves nothing; a worker that
+    died mid-verification can strand one. On startup we sweep by label. Returns
+    the number of containers removed (0 when docker is unavailable — never
+    raises, so it can't block worker startup).
+    """
+    try:
+        listed = subprocess.run(
+            ["docker", "ps", "-aq", "--filter", f"label={SANDBOX_LABEL}"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return 0
+    if listed.returncode != 0:
+        return 0
+    ids = [c for c in listed.stdout.split() if c]
+    if not ids:
+        return 0
+    try:
+        subprocess.run(
+            ["docker", "rm", "-f", *ids],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return 0
+    return len(ids)
+
 
 class SandboxError(RuntimeError):
     """Raised when the sandbox cannot run at all (image/daemon problem)."""
@@ -212,6 +250,8 @@ class SandboxRunner:
             "docker",
             "run",
             "--rm",
+            "--label",
+            SANDBOX_LABEL,
             "--memory",
             "1g",
             "--cpus",

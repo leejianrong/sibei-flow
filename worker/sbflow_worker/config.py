@@ -19,9 +19,12 @@ class Config:
     #: Lease/visibility timeout set on claim (seconds). V5 uses this for
     #: crash-recovery re-claim; in V1 it is simply populated.
     lease_seconds: int
-    #: Poll interval when the queue is empty (seconds). A plain poll is fine for
-    #: V1; LISTEN/NOTIFY latency work is V5.
+    #: Poll interval when the queue is empty (seconds). Also the fallback wake
+    #: interval when LISTEN/NOTIFY is enabled — the durable safety net.
     poll_interval: float
+    #: V5 task 6: LISTEN on `sbflow_jobs` to wake immediately on enqueue instead
+    #: of waiting out the poll interval. The poll remains the fallback.
+    listen_notify: bool
 
     # --- V2: agent loop ----------------------------------------------------
     #: Read-only warehouse connection for `get_schema` (INFORMATION_SCHEMA).
@@ -70,6 +73,8 @@ class Config:
             ),
             lease_seconds=int(os.environ.get("LEASE_SECONDS", "60")),
             poll_interval=float(os.environ.get("POLL_INTERVAL", "2.0")),
+            listen_notify=os.environ.get("LISTEN_NOTIFY", "1")
+            not in ("0", "", "false"),
             warehouse_url=os.environ.get("WAREHOUSE_URL") or None,
             repo_root=os.environ.get("REPO_ROOT", "/repo"),
             llm_provider=os.environ.get("LLM_PROVIDER", "replay"),

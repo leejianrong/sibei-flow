@@ -121,6 +121,56 @@ def test_dropped_jobs_are_never_claimed(conn):
     assert row["result"] == {"outcome": "out_of_scope", "reason": "timeout"}
 
 
+def _insert_stuck(conn, state, lease_delta_seconds) -> uuid.UUID:
+    """A job left in a non-terminal working state with a lease that expires
+    `lease_delta_seconds` from now (negative = already expired)."""
+    job_id = uuid.uuid4()
+    with conn.transaction():
+        conn.execute(
+            """
+            INSERT INTO repair_jobs
+                (id, idem_key, repo, run_id, task_id, node_uid,
+                 failure_class, payload, state, lease_expires_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    now() + make_interval(secs => %s))
+            """,
+            (
+                job_id,
+                "k-" + job_id.hex,
+                "acme/analytics",
+                "run-1",
+                "build_orders",
+                "model.analytics.orders",
+                "schema_drift",
+                Json({"error_text": 'column "x" does not exist'}),
+                state,
+                lease_delta_seconds,
+            ),
+        )
+    return job_id
+
+
+def test_expired_lease_lets_another_worker_reclaim(conn):
+    """R7.1 crash recovery: a job stuck `claimed`/`verifying` past its lease is
+    re-claimable, so a job resumes after the worker holding it dies mid-run."""
+    stuck = _insert_stuck(conn, state="verifying", lease_delta_seconds=-30)
+
+    processed = claim_and_process(conn, lease_seconds=60, process=_NO_FIX)
+    assert processed == stuck, "expired-lease orphan must be re-claimed"
+
+    row = _get(conn, stuck)
+    assert row["state"] == "done"
+    assert row["result"] == {"outcome": "no_fix"}
+
+
+def test_valid_lease_is_not_reclaimed(conn):
+    """A claim whose lease is still valid belongs to a live worker — another
+    worker must not steal it."""
+    _insert_stuck(conn, state="claimed", lease_delta_seconds=300)
+
+    assert claim_and_process(conn, lease_seconds=60, process=_NO_FIX) is None
+
+
 def test_only_one_worker_claims_a_job_skip_locked(conn):
     """A second connection holding the row lock cannot double-claim (SKIP LOCKED)."""
     job_id = _insert_queued(conn)
