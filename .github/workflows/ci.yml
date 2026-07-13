@@ -234,6 +234,6 @@ jobs:
       # gitleaks — secret scanning with the default ruleset (no config file).
       # HARD FAIL: this step has no continue-on-error.
       - name: gitleaks
-        uses: gitleaks/gitleaks-action@v2
+        uses: gitleaks/gitleaks-action@v3
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
