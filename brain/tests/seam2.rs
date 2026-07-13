@@ -126,6 +126,52 @@ async fn out_of_scope_payload_is_recorded_not_dispatched(pool: PgPool) {
     assert_eq!(detail["result"]["reason"], "timeout");
 }
 
+/// Re-delivering the same Failure collapses to exactly one job (R7.2, story 27).
+/// The second webhook returns the SAME job id, flagged `deduplicated`, and never
+/// creates a second row — never corrupted state (ADR-0009).
+#[sqlx::test]
+async fn redelivered_payload_collapses_to_one_job(pool: PgPool) {
+    let base = spawn(pool.clone()).await;
+    let client = reqwest::Client::new();
+    let payload = schema_drift_payload();
+
+    let first: Value = client
+        .post(format!("{base}/webhook"))
+        .json(&payload)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(first["deduplicated"], false);
+    let first_id = first["id"].as_str().unwrap().to_string();
+
+    // Re-deliver the identical payload (duplicate webhook / at-least-once).
+    let second: Value = client
+        .post(format!("{base}/webhook"))
+        .json(&payload)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(second["deduplicated"], true, "second delivery must dedup");
+    assert_eq!(
+        second["id"].as_str().unwrap(),
+        first_id,
+        "dedup must return the existing job id, not a new one"
+    );
+
+    // Exactly one row exists for this failure — the durable dispatch is unique.
+    let total: i64 = sqlx::query_scalar("SELECT count(*) FROM repair_jobs")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(total, 1, "re-delivery must not create a second job");
+}
+
 /// The dashboard API is read-only — only GET is allowed; write verbs 405.
 #[sqlx::test]
 async fn dashboard_api_exposes_no_write_endpoints(pool: PgPool) {

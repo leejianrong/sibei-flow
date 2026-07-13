@@ -21,6 +21,9 @@ pub struct WebhookAck {
     pub state: String,
     /// True when the job was enqueued for a worker; false when recorded+dropped.
     pub dispatched: bool,
+    /// True when this webhook was a re-delivery that collapsed onto an existing
+    /// job (dedup, R7.2) — no new row was created.
+    pub deduplicated: bool,
 }
 
 /// Handler for `POST /webhook`.
@@ -56,12 +59,18 @@ pub async fn receive(
         )
     };
 
-    sqlx::query(
+    // Dedup (V5, R7.2): a re-delivered Failure has the same idem_key. The UNIQUE
+    // partial index (migration 0003) + `ON CONFLICT DO NOTHING` collapses it to
+    // the one existing job — never a duplicate, never corrupted state (ADR-0009).
+    // `RETURNING id` is present only when a row was actually inserted.
+    let inserted_id: Option<Uuid> = sqlx::query_scalar(
         r#"
         INSERT INTO repair_jobs
             (id, idem_key, repo, run_id, task_id, node_uid,
              failure_class, payload, state, result, created_at, updated_at)
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now(), now())
+        ON CONFLICT (idem_key) WHERE idem_key IS NOT NULL DO NOTHING
+        RETURNING id
         "#,
     )
     .bind(id)
@@ -74,22 +83,61 @@ pub async fn receive(
     .bind(&payload)
     .bind(state)
     .bind(&result)
-    .execute(&pool)
+    .fetch_optional(&pool)
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    if let Some(new_id) = inserted_id {
+        // Fresh enqueue. Nudge the worker to wake immediately (LISTEN/NOTIFY,
+        // V5 task 6) for an in-scope job; the poll loop is the fallback so a
+        // missed NOTIFY never strands a job.
+        if classification.in_scope {
+            if let Err(e) = sqlx::query("SELECT pg_notify('sbflow_jobs', $1)")
+                .bind(new_id.to_string())
+                .execute(&pool)
+                .await
+            {
+                tracing::warn!(error = %e, "pg_notify failed; worker will pick it up on poll");
+            }
+        }
+        tracing::info!(
+            id = %new_id, failure_class = %classification.failure_class, state,
+            dispatched = classification.in_scope, "webhook accepted"
+        );
+        return Ok((
+            StatusCode::ACCEPTED,
+            Json(WebhookAck {
+                id: new_id,
+                failure_class: classification.failure_class,
+                state: state.to_string(),
+                dispatched: classification.in_scope,
+                deduplicated: false,
+            }),
+        ));
+    }
+
+    // Conflict: re-delivery. Return the existing job's identity/state so the
+    // caller sees a stable ack instead of a spurious new id.
+    let existing = sqlx::query_as::<_, (Uuid, String, Option<String>)>(
+        "SELECT id, state, failure_class FROM repair_jobs WHERE idem_key = $1",
+    )
+    .bind(&idem_key)
+    .fetch_one(&pool)
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     tracing::info!(
-        %id, failure_class = %classification.failure_class, state,
-        dispatched = classification.in_scope, "webhook accepted"
+        id = %existing.0, idem_key = %idem_key,
+        "webhook re-delivery collapsed onto existing job (dedup)"
     );
-
     Ok((
         StatusCode::ACCEPTED,
         Json(WebhookAck {
-            id,
-            failure_class: classification.failure_class,
-            state: state.to_string(),
+            id: existing.0,
+            failure_class: existing.2.unwrap_or(classification.failure_class),
+            state: existing.1,
             dispatched: classification.in_scope,
+            deduplicated: true,
         }),
     ))
 }
