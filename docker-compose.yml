@@ -27,7 +27,7 @@ services:
       DATABASE_URL: postgres://sibei:sibei@postgres:5432/sibei
       BIND_ADDR: 0.0.0.0:8080
       RUST_LOG: info,brain=info,sqlx=warn
-      # V4 PR opener (ADR-0010). Default backend = offline: push the fix branch
+      # V4 PR opener (ADR-0011). Default backend = offline: push the fix branch
       # to the bundled bare git remote and record branch + compare as the "PR".
       # No credentials, fully offline. Set GIT_HOST=github + GITHUB_TOKEN +
       # GIT_REPO to open a REAL PR instead. GITHUB_TOKEN must be PR-scoped only —
