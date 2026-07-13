@@ -134,6 +134,10 @@ services:
       SBFLOW_WEBHOOK_URL: http://brain:8080/webhook
       SBFLOW_REPO: acme/analytics
       SBFLOW_ADAPTER: postgres
+      # The dbt run_results.json the callback reads the REAL error + node uid
+      # from (matches the DAG's DBT_TARGET_PATH). Without it, a BashOperator only
+      # surfaces a generic "Bash command failed" exception (no drift signal).
+      SBFLOW_RUN_RESULTS: /tmp/dbt/target/run_results.json
       # dbt → warehouse (the pipeline's own analytics_app role, not sibei-flow's).
       SBFLOW_WH_HOST: warehouse
       SBFLOW_WH_PORT: "5432"

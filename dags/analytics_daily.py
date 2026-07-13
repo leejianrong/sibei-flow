@@ -36,19 +36,18 @@ PROJECT_DIR = os.environ.get("DBT_PROJECT_DIR", "/opt/airflow/dbt_project")
 PROFILES_DIR = os.environ.get("DBT_PROFILES_DIR", "/opt/airflow/dbt_profiles")
 
 # dbt writes target/ + logs/ under a writable path (the project mount is
-# read-only, shared with the worker's read-only source checkout).
+# read-only, shared with the worker's read-only source checkout). We cd into the
+# project and pass dirs via env so we never depend on dbt's per-subcommand flag
+# ordering (--project-dir / --profiles-dir are subcommand options in dbt 1.9).
 _ARTIFACTS = "/tmp/dbt"
-_COMMON = (
-    f"{DBT} --no-use-colors "
-    f"--project-dir {PROJECT_DIR} --profiles-dir {PROFILES_DIR}"
-)
 
 
 def _dbt(subcmd: str) -> str:
     return (
-        f"mkdir -p {_ARTIFACTS} && "
-        f"export DBT_TARGET_PATH={_ARTIFACTS}/target DBT_LOG_PATH={_ARTIFACTS}/logs && "
-        f"{_COMMON} {subcmd}"
+        f"mkdir -p {_ARTIFACTS} && cd {PROJECT_DIR} && "
+        f"export DBT_PROFILES_DIR={PROFILES_DIR} "
+        f"DBT_TARGET_PATH={_ARTIFACTS}/target DBT_LOG_PATH={_ARTIFACTS}/logs && "
+        f"{DBT} --no-use-colors {subcmd}"
     )
 
 
