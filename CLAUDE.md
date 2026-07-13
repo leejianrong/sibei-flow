@@ -8,14 +8,21 @@ see [`README.md`](README.md) and [`docs/design/`](docs/design/) for depth
 
 ## Build status (honest)
 
-- **Shipped:** V1 (walking skeleton: webhook → classify → enqueue → claim →
-  record → read-only dashboard), V2 (bounded agent loop drafts a minimal fix),
-  V3 (every draft is compiled in an ephemeral Docker sandbox; non-compiling
+- **Shipped (full v1 scope):** V1 (walking skeleton: webhook → classify → enqueue
+  → claim → record → read-only dashboard), V2 (bounded agent loop drafts a minimal
+  fix), V3 (every draft is compiled in an ephemeral Docker sandbox; non-compiling
   drafts are suppressed to `no_fix`, never proposed), V4 (the auto-PR — a
   verified `pr_proposed` becomes a real Pull Request via a brain-side poller
-  behind a pluggable git-host seam: `offline` default / `github`; ADR-0011).
-- **Planned:** V5 (hardening & onboarding: dedupe, crash recovery, `sbflow
-  init`, `needs_prod_action`). Not built yet.
+  behind a pluggable git-host seam: `offline` default / `github`; ADR-0011),
+  V5 (hardening & onboarding: dedupe via unique `idem_key` + `ON CONFLICT`, crash
+  recovery — brain reconcile + worker lease re-claim + orphan-container sweep,
+  `LISTEN/NOTIFY` fast dispatch, `sbflow init` + `sbflow run -- <cmd>` CLI +
+  Airflow/dbt enrollment snippets, `needs_prod_action` for incremental/non-rename
+  drift, and PG/Snowflake/BigQuery classifier expansion).
+- **Deferred (intentional):** a multi-process warm worker pool and a long-lived
+  warm sandbox container — measured hero p50 (~12s webhook→PR) is already far under
+  the ~90s bar, and a persistent container would risk the ephemeral `--rm`
+  isolation invariant.
 
 ## What it is
 
