@@ -37,7 +37,13 @@ def wait_for_schema(
 
 def _prewarm_sandbox(cfg: Config) -> None:
     """Pre-bake the verification image so the first job isn't a build (B-S6)."""
-    from .sandbox.runner import SandboxError, SandboxRunner
+    from .sandbox.runner import SandboxError, SandboxRunner, cleanup_orphans
+
+    # Crash recovery (V5 task 2): sweep any ephemeral sandbox containers a
+    # previously-crashed worker left behind before we start taking jobs.
+    swept = cleanup_orphans()
+    if swept:
+        print(f"[worker] removed {swept} orphaned sandbox container(s)", flush=True)
 
     runner = SandboxRunner(repo_root=cfg.repo_root, image=cfg.sandbox_image)
     try:

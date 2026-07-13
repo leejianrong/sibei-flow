@@ -28,6 +28,13 @@ async fn main() -> anyhow::Result<()> {
         .context("running migrations")?;
     tracing::info!("migrations applied");
 
+    // Crash recovery (V5, R7.1): requeue jobs orphaned by a worker that died
+    // mid-run (expired lease in a non-terminal state) so they resume.
+    match brain::reconcile_orphaned_jobs(&pool).await {
+        Ok(n) => tracing::info!(requeued = n, "startup reconcile complete"),
+        Err(e) => tracing::error!(error = %e, "startup reconcile failed; continuing"),
+    }
+
     // V4: the PR opener. Runs only when a git host is configured (GIT_HOST);
     // otherwise the brain stays read-only-plus-enqueue as in V1–V3.
     match brain::pr::PrOpenerConfig::from_env() {
