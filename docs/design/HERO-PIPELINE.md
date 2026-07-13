@@ -7,9 +7,10 @@
 > sibei-flow's loop to a verified `pr_proposed`. See README §"Run the live hero
 > pipeline" and `worker/tests/test_hero.py` (the Seam-3 acceptance test).
 >
-> The one piece still ahead is **V4's PR opener** — turning that `pr_proposed`
-> into an actual Pull Request against the git remote. Everything up to the
-> verified diff + evidence is live today.
+> **V4's PR opener is now built too:** the brain turns that `pr_proposed` into a
+> real Pull Request — pushing the fix branch to the git remote (offline default)
+> or opening a GitHub PR (token mode). The whole loop, rename → DAG fails →
+> verified diff → **PR**, runs end to end (measured ~15s webhook→PR offline).
 >
 > This doc pins down the *one concrete dbt-in-Airflow pipeline* the v1
 > acceptance demo runs against, and records the decision to **actually build and
@@ -109,7 +110,7 @@ Seam-3 executable acceptance test — not leave it as static fixtures. Concretel
 | V1 (done) | failure payload → classified run in the dashboard (fixture payload stands in for the live DAG). |
 | V2 | real read + drift diff + drafted `customer_id → cust_id`. |
 | V3 | real ephemeral-sandbox verification + evidence against the sample warehouse. |
-| **V4** | **the full live loop**: rename column → DAG fails → PR appears. This is the Show-HN demo and the first slice where the *whole* hero pipeline runs end to end. |
+| **V4** ✓ | **the full live loop**: rename column → DAG fails → **PR appears** (fix branch pushed to the bare `git-remote`, recorded on the job + linked from the dashboard). The Show-HN demo; measured ~15s webhook→PR offline. |
 | V5 | hardened: crash/restart mid-run, duplicate webhook safety, `sbflow run --`, `sbflow init`, latency tuning. |
 
 **Action item (DONE):** `hero/` stood up as the Seam-3 harness — see below.
@@ -131,8 +132,10 @@ Behind `docker compose --profile hero` (core stack stays lean without it):
   the worker resolves the failing source file.
 - **`git-remote`** — a fully-offline bare git repo (git daemon over `git://`)
   seeded from the dbt project: the worker's read-at-ref source and V4's push
-  target. (The worker still reads via the compatible `LocalSourceProvider`
-  bind-mount today; the git remote is wired for V4.)
+  target. **Now part of the core stack** (not just the hero profile) so the
+  offline PR opener always has a real branch/push target. (The worker still
+  reads via the compatible `LocalSourceProvider` bind-mount today; the V4 opener
+  clones + pushes here.)
 - **healthy-then-break, without disturbing the test seed:** `db/warehouse/
   init.sql` is untouched (it still seeds the POST-rename state the worker tests
   rely on). The hero flow drives the warehouse state *live* instead:
@@ -149,12 +152,13 @@ Behind `docker compose --profile hero` (core stack stays lean without it):
   Astro/Celery.
 - **Warehouse:** reuse the fixture Postgres `warehouse` (matches the fixture
   adapter); Snowflake/BigQuery stay pattern-only.
-- **Git host:** a local offline bare git remote for the demo. Real GitHub
-  (scoped token/App) is a V4 PR-opener config switch behind the same remote.
+- **Git host:** decided in ADR-0011 — a pluggable seam. Default `offline` pushes
+  to the local bare git remote (no creds); `github` opens a real PR with a
+  PR-scoped token. Same PR body either way.
 
 ### Slice status
 
 | Slice | Status against the live harness |
 |---|---|
 | V1–V3 | proven live: real read + drift diff + drafted `customer_id → cust_id`, verified in the ephemeral sandbox with evidence. |
-| **V4** | **remaining:** turn the verified `pr_proposed` into a real PR against `git-remote`. The rest of the loop (DAG fails → verified diff appears) runs end to end today. |
+| **V4** ✓ | **done:** the verified `pr_proposed` becomes a real PR — fix branch pushed to `git-remote` (offline) with the minimal `customer_id → cust_id` diff, recorded on the job + linked from the dashboard. The whole loop runs end to end. |

@@ -43,17 +43,21 @@ carries honest evidence + confidence/risk; non-compiling drafts are suppressed.
 - Sandbox image + dev/sample warehouse tier-2 target
 - Dashboard renders evidence + confidence/risk (U5)
 
-### M4: The Auto-PR (V4) — *todo*
+### M4: The Auto-PR (V4) — *done*
 A verified `pr_proposed` result becomes a real Pull Request carrying the diff +
 evidence; the merge is the sole path to prod.
-- PR opener (`brain/pr/`): `pr_proposed` → branch + PR (N14)
-- PR body template from RepairResult (U3)
-- Record PR URL on job row + link from dashboard
-- Prod-write guardrail test: no prod-write credential ever loaded
-- End-to-end latency measurement (p50 ≤ ~90s)
+- PR opener (`brain/src/pr/`): background poller, `pr_proposed` → branch + PR (N14) — *done*
+- Pluggable git-host seam (`offline` default / `github`), ADR-0011 — *done*
+- PR body template from RepairResult (U3): explanation + diff + evidence table +
+  confidence/risk + collapsible transcript + rollback footer — *done*
+- Record PR URL on job row (migration `0002_pr.sql`) + link from dashboard — *done*
+- Idempotency: `pr_url IS NULL` dedupe guard (never opens a duplicate PR) — *done*
+- Prod-write guardrail test: no prod-write credential ever loaded (R6.1) — *done*
+- End-to-end latency measurement (p50 ≤ ~90s): measured ~15s webhook→PR on the
+  flagship offline case — *done*
 - Live hero pipeline: runnable Airflow+dbt env (Seam-3 harness) — *done* (the
   `docker compose --profile hero` stack + `make hero` / `hero-break`; the live
-  loop heals real warehouse drift end to end. The PR-opener half is still V4.)
+  loop heals real warehouse drift and opens the PR end to end).
 
 ### M5: Hardening & Onboarding (V5) — *todo*
 Production-trust properties (durability, dedup, honest prod-action
