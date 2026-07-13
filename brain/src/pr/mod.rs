@@ -248,6 +248,33 @@ mod tests {
         assert_eq!(third.len(), 1, "released claim is retried");
     }
 
+    /// V5 invariant (story 16): a `needs_prod_action` result carries no code fix
+    /// and must NEVER be opened as a PR — the opener only ever claims
+    /// `pr_proposed`. A recommendation is surfaced on the dashboard, not applied.
+    #[sqlx::test]
+    async fn needs_prod_action_is_never_a_pr_candidate(pool: PgPool) {
+        let id = Uuid::new_v4();
+        sqlx::query(
+            r#"
+            INSERT INTO repair_jobs (id, idem_key, repo, state, result, created_at, updated_at)
+            VALUES ($1, $2, 'acme/analytics', 'done',
+                    '{"outcome":"needs_prod_action","explanation":"full-refresh in prod"}'::jsonb,
+                    now(), now())
+            "#,
+        )
+        .bind(id)
+        .bind(id.to_string())
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let candidates = fetch_candidates(&pool).await.unwrap();
+        assert!(
+            candidates.is_empty(),
+            "needs_prod_action must never be opened as a PR"
+        );
+    }
+
     /// Once a PR is recorded (`pr_url` set), the candidate is never re-opened,
     /// even though the claim mechanism is new.
     #[sqlx::test]

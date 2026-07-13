@@ -39,6 +39,7 @@
     .pill.queued, .pill.claimed { color: var(--accent); border-color: var(--accent); }
     .pill.done { color: var(--ok); border-color: var(--ok); }
     .pill.pr_proposed { color: var(--warn); border-color: var(--warn); }
+    .pill.needs_prod_action { color: var(--warn); border-color: var(--warn); }
     .badge-unverified {
       display: inline-block; font-size: 11px; font-weight: 600; letter-spacing: .4px;
       color: var(--warn); border: 1px solid var(--warn); border-radius: 6px;
@@ -54,6 +55,14 @@
       color: var(--drop); border: 1px solid var(--drop); border-radius: 6px;
       padding: 3px 8px; margin-bottom: 12px; text-transform: uppercase;
     }
+    .badge-prodaction {
+      display: inline-block; font-size: 11px; font-weight: 600; letter-spacing: .4px;
+      color: var(--warn); border: 1px solid var(--warn); border-radius: 6px;
+      padding: 3px 8px; margin-bottom: 12px; text-transform: uppercase;
+    }
+    .card.prodaction { border-color: var(--warn); }
+    .card.prodaction h3 { color: var(--warn); }
+    .card.prodaction pre { white-space: pre-wrap; }
     .evidence { list-style: none; margin: 0; padding: 0; }
     .evidence li { padding: 5px 0; display: flex; align-items: baseline; gap: 10px; }
     .evidence .mark { font-weight: 700; width: 16px; display: inline-block; }
@@ -188,10 +197,24 @@
 
       let sections = "";
       const ev = res.evidence;
+      // needs_prod_action (V5): the drift is an incremental model hit by a
+      // column removal/retype. sibei-flow does NOT draft a fix (that would
+      // silently assume a prod migration); it surfaces a human recommendation
+      // and opens no PR. Rendered prominently, in place of the usual cards.
+      const isProdAction = d.outcome === "needs_prod_action";
+      if (isProdAction) {
+        sections += `<div class="badge-prodaction">⚑ needs prod action — no fix drafted</div>`;
+        if (res.explanation) {
+          sections += `<div class="card prodaction"><h3>Recommended prod action</h3>`
+            + `<pre>${esc(res.explanation)}</pre>`
+            + `<div class="detail" style="color:var(--muted);margin-top:8px">`
+            + `sibei-flow holds no prod-write credentials and opens no PR for this — a human acts in prod.</div></div>`;
+        }
+      }
       // Status badge reflects REAL evidence (V3): verified when tier-1 passed;
       // suppressed when a non-compiling draft was gated to no_fix; unverified
       // only when no sandbox ran at all (legacy V2 shape).
-      if (ev == null && d.outcome === "pr_proposed") {
+      if (!isProdAction && ev == null && d.outcome === "pr_proposed") {
         sections += `<div class="badge-unverified">⚠ unverified — no sandbox evidence</div>`;
       } else if (ev != null && d.outcome === "no_fix") {
         sections += `<div class="badge-suppressed">suppressed — draft did not pass the compile gate</div>`;
@@ -212,7 +235,7 @@
           + (d.pr_branch ? `<div class="detail" style="color:var(--muted);margin-top:6px">branch <code>${esc(d.pr_branch)}</code> · opened ${fmt(d.pr_opened_at)}</div>` : "")
           + `</div>`;
       }
-      if (res.explanation) {
+      if (res.explanation && !isProdAction) {
         sections += `<div class="card"><h3>Explanation</h3><div>${esc(res.explanation)}</div></div>`;
       }
       if (ev) {
