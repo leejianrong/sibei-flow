@@ -59,7 +59,7 @@ evidence; the merge is the sole path to prod.
   `docker compose --profile hero` stack + `make hero` / `hero-break`; the live
   loop heals real warehouse drift and opens the PR end to end).
 
-### M5: Hardening & Onboarding (V5) — *in progress*
+### M5: Hardening & Onboarding (V5) — *done*
 Production-trust properties (durability, dedup, honest prod-action
 recommendations), one-command onboarding, and the ~90s latency mechanisms.
 - Dedupe: idempotency key + unique index + `ON CONFLICT DO NOTHING` (story 27, R7.2) — *done*
@@ -68,8 +68,10 @@ recommendations), one-command onboarding, and the ~90s latency mechanisms.
 - Latency tuning: `LISTEN/NOTIFY` fast dispatch + pre-baked sandbox; measured hero p50 ≈ 10.6s heal / 12.1s to PR (≪ 90s, R5.6) — *done* (warm worker pool / long-lived warm container deferred — see V5-plan)
 - Detection ergonomics: Airflow callback + dbt hook + `sbflow run --` cron wrapper — *done*
 - `sbflow init` onboarding flow + config file — *done*
-- `needs_prod_action` rule (incremental + non-rename drift) — *todo*
-- Classifier pattern expansion (Postgres/Snowflake/BigQuery) — *todo*
+- `needs_prod_action` rule (incremental + non-rename drift → recommendation, no
+  prod-assuming PR) (story 16, R3.4) — *done*
+- Classifier pattern expansion (Postgres/Snowflake/BigQuery drift/relation/type
+  phrasings; unknown → drop preserved) (story 15, R2.3/R2.4) — *done*
 
 ## Ongoing (cross-cutting, no milestone)
 
@@ -106,8 +108,8 @@ The externally-shipped GitHub Pages landing site.
 | | Count |
 |---|---|
 | Epics | 8 (5 milestones + 3 Ongoing) |
-| Stories done | 39 |
-| Stories todo | 13 |
+| Stories done | 41 |
+| Stories todo | 11 |
 | Stories in progress | 0 |
 | **Total stories** | **52** |
 

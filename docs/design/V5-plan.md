@@ -61,7 +61,12 @@ R7.2 (dup-safe), and broader R2.3/R2.4 coverage.
    `verifying` jobs at brain startup; the worker claim query re-claims
    expired-lease jobs; ephemeral sandbox containers are labelled `sbflow.sandbox`
    and swept on worker startup. (brain reconcile test + worker re-claim tests.)
-3. `needs_prod_action` rule + recommendation rendering (no prod write). — *todo
+3. `needs_prod_action` rule + recommendation rendering (no prod write). —
+   **done** (`worker/…/agent/prodaction.py`: incremental + retype/removal →
+   `outcome = needs_prod_action` with a recommendation and no diff; dashboard
+   run-detail surfaces it; the PR opener only opens `pr_proposed`, so no
+   prod-assuming PR is possible — dashboard surfacing over a recommendation-only
+   PR, which stayed cleaner within the existing opener). — *todo
    (Wave 2, with the classifier).*
 4. **[done]** Airflow snippet + dbt hook + `sbflow run -- <cmd>` wrapper. — shipped
    `snippets/` (Airflow `on_failure_callback` + a dbt `on-run-end` macro) and the
@@ -81,7 +86,11 @@ R7.2 (dup-safe), and broader R2.3/R2.4 coverage.
    optimizations unnecessary to hit the ~90s bar and the latter risks the
    ephemeral `--rm` isolation invariant. Left for a future pass if throughput
    (not latency) becomes the constraint.
-7. Expand classifier patterns; keep **unknown → drop** default. — *todo (Wave 2,
+7. Expand classifier patterns; keep **unknown → drop** default. — **done**
+   (`brain/src/classify.rs`: adapter-aware Postgres/Snowflake/BigQuery phrasings
+   for missing column, missing relation/table, and retype; a couple of code/SQL
+   syntax markers. Story-15 tests confirm the new positives classify in-scope and
+   representative permission/connection/arithmetic errors still drop.) — *todo (Wave 2,
    with `needs_prod_action`).*
 
 ### Delivered — onboarding & detection ergonomics (tasks 4 & 5)
