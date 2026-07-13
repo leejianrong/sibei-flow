@@ -14,6 +14,7 @@ from .agent import build_processor
 from .claim import claim_and_process
 from .config import Config
 from .db import connect_with_retry
+from .notify import JobNotifier
 
 
 def wait_for_schema(
@@ -65,9 +66,14 @@ def main() -> None:
     if cfg.sandbox_enabled:
         _prewarm_sandbox(cfg)
     process = build_processor(cfg)
+    # LISTEN/NOTIFY fast dispatch (V5 task 6): wake on enqueue instead of waiting
+    # out the poll interval. The poll below is still the durability fallback, so
+    # a missed notification never strands a job.
+    notifier = JobNotifier(cfg.database_url) if cfg.listen_notify else None
     print(
         f"[worker] started; provider={cfg.llm_provider} model={cfg.llm_model} "
-        f"lease={cfg.lease_seconds}s poll={cfg.poll_interval}s",
+        f"lease={cfg.lease_seconds}s poll={cfg.poll_interval}s "
+        f"listen={'on' if notifier else 'off'}",
         flush=True,
     )
     try:
@@ -80,10 +86,17 @@ def main() -> None:
                 drained += 1
                 print(f"[worker] processed job {job_id}", flush=True)
             if drained == 0:
-                time.sleep(cfg.poll_interval)
+                # Block until notified of a new job, or until the poll interval
+                # elapses (fallback). A plain sleep when LISTEN is disabled.
+                if notifier is not None:
+                    notifier.wait(cfg.poll_interval)
+                else:
+                    time.sleep(cfg.poll_interval)
     except KeyboardInterrupt:
         print("[worker] shutting down", flush=True)
     finally:
+        if notifier is not None:
+            notifier.close()
         conn.close()
 
 
