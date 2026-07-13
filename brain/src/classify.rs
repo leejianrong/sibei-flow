@@ -67,22 +67,38 @@ pub fn classify(error_text: &str, _adapter: &str) -> Classification {
         return Classification::dropped("data_quality");
     }
 
-    // --- In scope: schema drift (missing / mismatched column) -------------
-    // Postgres: column "x" does not exist · Snowflake: invalid identifier
-    // BigQuery: Unrecognized name · plus type/nullable mismatches.
-    if e.contains("does not exist") && e.contains("column")
-        || e.contains("column \"")
-        || e.contains("invalid identifier")
-        || e.contains("unrecognized name")
-        || e.contains("undefined column")
-        || e.contains("no such column")
+    // --- In scope: schema drift (missing / mismatched column or relation) --
+    // Adapter-aware phrasings across Postgres / Snowflake / BigQuery. Each is a
+    // *confident* drift signal; anything not listed falls through to drop below.
+    if
+    // Missing column
+    e.contains("does not exist") && e.contains("column")   // Postgres: column "x" does not exist
+        || e.contains("column \"")                         // Postgres (quoted column)
+        || e.contains("undefined column")                  // Postgres (UndefinedColumn sqlstate text)
+        || e.contains("no such column")                    // SQLite / Spark / DuckDB
+        || e.contains("could not find column")             // generic engines
+        || e.contains("invalid identifier")                // Snowflake: invalid identifier 'X'
+        || e.contains("unrecognized name")                 // BigQuery: Unrecognized name: x
+        || e.contains("not found inside")                  // BigQuery: Name x not found inside y
+        // Missing relation / table (upstream renamed or dropped)
+        || (e.contains("relation") && e.contains("does not exist"))     // Postgres: relation "x" ...
+        || e.contains("not found: table")                  // BigQuery: Not found: Table proj.ds.x
+        || e.contains("does not exist or not authorized")  // Snowflake: Object '...' does not exist ...
+        // Type / retype mismatch (worker may recommend a prod action on incremental models)
         || e.contains("datatype mismatch")
         || e.contains("cannot cast")
+        || e.contains("cannot coerce")                     // BigQuery: Cannot coerce expression ... to type
+        || e.contains("but expression is of type")         // Postgres: column x is of type int but ...
+        || e.contains("does not match column data type")   // Snowflake: Expression type does not match ...
+        // BigQuery: Value of type X cannot be assigned to Y
+        || e.contains("cannot be assigned to")
     {
         return Classification::in_scope("schema_drift");
     }
 
     // --- In scope: code / SQL error ---------------------------------------
+    // Postgres: "syntax error at or near" · Snowflake: "syntax error line N at
+    // position M" / "unexpected '<x>'" · BigQuery: "Syntax error: Unexpected ..."
     if e.contains("syntax error at or near")
         || e.contains("syntax error")
         || e.contains("compilation error")
@@ -90,6 +106,9 @@ pub fn classify(error_text: &str, _adapter: &str) -> Classification {
         || e.contains("traceback (most recent call")
         || e.contains("syntaxerror")
         || e.contains("unexpected token")
+        || e.contains("unexpected keyword")                // Snowflake
+        // BigQuery: Syntax error: Unexpected identifier
+        || e.contains("unexpected identifier")
     {
         return Classification::in_scope("code_sql");
     }
@@ -116,6 +135,102 @@ mod tests {
             "snowflake",
         );
         assert_eq!(c.failure_class, "schema_drift");
+    }
+
+    // --- Story 15: expanded drift phrasings across dialects ----------------
+
+    #[test]
+    fn bigquery_unrecognized_name_is_schema_drift() {
+        let c = classify("Unrecognized name: order_ts at [4:5]", "bigquery");
+        assert_eq!(c.failure_class, "schema_drift");
+        assert!(c.in_scope);
+    }
+
+    #[test]
+    fn bigquery_name_not_found_inside_is_schema_drift() {
+        let c = classify("Name customer_id not found inside customers", "bigquery");
+        assert_eq!(c.failure_class, "schema_drift");
+    }
+
+    #[test]
+    fn postgres_retype_is_schema_drift() {
+        let c = classify(
+            r#"column "amount" is of type numeric but expression is of type text"#,
+            "postgres",
+        );
+        assert_eq!(c.failure_class, "schema_drift");
+    }
+
+    #[test]
+    fn snowflake_type_mismatch_is_schema_drift() {
+        let c = classify(
+            "Expression type does not match column data type, expecting NUMBER but got VARCHAR",
+            "snowflake",
+        );
+        assert_eq!(c.failure_class, "schema_drift");
+    }
+
+    #[test]
+    fn bigquery_cannot_coerce_is_schema_drift() {
+        let c = classify("Cannot coerce expression amount to type INT64", "bigquery");
+        assert_eq!(c.failure_class, "schema_drift");
+    }
+
+    #[test]
+    fn postgres_missing_relation_is_schema_drift() {
+        let c = classify(r#"relation "raw.raw_orders" does not exist"#, "postgres");
+        assert_eq!(c.failure_class, "schema_drift");
+    }
+
+    #[test]
+    fn bigquery_table_not_found_is_schema_drift() {
+        let c = classify("Not found: Table my_project.ds.orders", "bigquery");
+        assert_eq!(c.failure_class, "schema_drift");
+    }
+
+    #[test]
+    fn snowflake_object_missing_is_schema_drift() {
+        let c = classify(
+            "SQL compilation error: Object 'ANALYTICS.PUBLIC.ORDERS' does not exist or not authorized.",
+            "snowflake",
+        );
+        assert_eq!(c.failure_class, "schema_drift");
+    }
+
+    #[test]
+    fn snowflake_unexpected_keyword_is_code_sql() {
+        let c = classify(
+            "SQL compilation error: syntax error line 3 at position 7 unexpected keyword 'FROM'",
+            "snowflake",
+        );
+        // The generic "syntax error" also matches; either way it is in-scope code.
+        assert_eq!(c.failure_class, "code_sql");
+        assert!(c.in_scope);
+    }
+
+    // --- Story 15: unknown / out-of-scope stay dropped after expansion -----
+
+    #[test]
+    fn representative_out_of_scope_errors_still_drop_after_expansion() {
+        // Permission, connection, and arithmetic errors are none of our confident
+        // in-scope signals: they must remain out_of_scope and never be dispatched.
+        for err in [
+            "permission denied for table orders",
+            "insufficient privileges to operate on schema analytics",
+            "could not connect to server: Connection refused",
+            "division by zero",
+            "duplicate key value violates unique constraint",
+            "deadlock detected",
+            "disk quota exceeded",
+        ] {
+            let c = classify(err, "postgres");
+            assert!(
+                c.failure_class.starts_with("out_of_scope"),
+                "expected out_of_scope for {err:?}, got {}",
+                c.failure_class
+            );
+            assert!(!c.in_scope, "{err:?} must never be dispatched");
+        }
     }
 
     #[test]
