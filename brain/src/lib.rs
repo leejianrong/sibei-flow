@@ -34,7 +34,7 @@ pub fn app(pool: PgPool) -> Router {
         .route("/healthz", get(healthz))
         .route("/webhook", post(webhook::receive))
         .route("/api/runs", get(api::list_runs))
-        .route("/api/runs/:id", get(api::get_run))
+        .route("/api/runs/{id}", get(api::get_run))
         .with_state(pool)
 }
 
