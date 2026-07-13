@@ -5,7 +5,8 @@
 # git protocol (git://git-remote:9418/analytics.git).
 FROM alpine:3.20
 
-RUN apk add --no-cache git
+# `git-daemon` is a separate alpine package from `git` (it ships `git daemon`).
+RUN apk add --no-cache git git-daemon
 
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
