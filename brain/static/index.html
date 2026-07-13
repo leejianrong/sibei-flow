@@ -166,7 +166,7 @@
           <td><code>${esc(x.repo || "—")}</code></td>
           <td>${classCell(x.failure_class)}</td>
           <td>${pill("state", x.state)}</td>
-          <td>${x.outcome ? pill("outcome", x.outcome) : "—"}</td>
+          <td>${x.outcome ? pill("outcome", x.outcome) : "—"}${x.pr_url ? ' <span title="PR opened">🔗</span>' : ""}</td>
           <td>${esc(x.task_id || "—")}</td>
           <td>${fmt(x.created_at)}</td>
         </tr>`).join("");
@@ -200,6 +200,17 @@
           ? "✓ verified — compiled &amp; ran on sample"
           : "✓ verified — compiled (sample not run)";
         sections += `<div class="badge-verified">${label}</div>`;
+      }
+      // V4: the opened Pull Request (the single write action). A real link in
+      // github mode; the branch + compare ref in offline mode.
+      if (d.pr_url) {
+        const isLink = /^https?:\/\//.test(d.pr_url);
+        const link = isLink
+          ? `<a href="${esc(d.pr_url)}" target="_blank" rel="noopener">${esc(d.pr_url)}</a>`
+          : `<code>${esc(d.pr_url)}</code>`;
+        sections += `<div class="card"><h3>Pull request</h3><div>${link}</div>`
+          + (d.pr_branch ? `<div class="detail" style="color:var(--muted);margin-top:6px">branch <code>${esc(d.pr_branch)}</code> · opened ${fmt(d.pr_opened_at)}</div>` : "")
+          + `</div>`;
       }
       if (res.explanation) {
         sections += `<div class="card"><h3>Explanation</h3><div>${esc(res.explanation)}</div></div>`;
