@@ -81,6 +81,25 @@ set `LLM_PROVIDER=claude` + `ANTHROPIC_API_KEY`, or `LLM_PROVIDER=openai` +
 - **Before a PR**, run the full `make test` (both suites, real sandbox).
 - Python via **uv**, targeting **3.12+**.
 
+### Merging PRs — merge when CI is green
+
+`main` is protected: every change lands via PR, and merging requires the three
+required checks — **`brain`, `worker`, `security`** — to pass on an up-to-date
+branch (0 approvals required, so you can self-merge).
+
+- **When a PR's checks are all green, merge it** (squash). The standard command
+  is merge-on-green: `gh pr merge <n> --squash --auto --delete-branch` — GitHub
+  merges automatically the moment checks pass and the branch is up to date.
+- This includes **Dependabot** PRs. Because protection is `strict` (branches must
+  be up to date), arm the whole batch with `--auto`; Dependabot rebases the
+  remaining PRs in cascade as `main` advances, and each merges once green.
+- **Never merge a PR with a failing or pending check.** If a dependency bump
+  breaks CI (typically a **major-version** bump — e.g. an `axum 0.7 → 0.8` that
+  fails the `brain` job), leave it open for a human to review/adapt; do not force
+  it through.
+- Verify status first with `gh pr checks <n>` (or `gh pr list --json
+  number,statusCheckRollup`). Green = merge; red/pending = wait or escalate.
+
 ## Invariants to protect (do not break)
 
 - **Frozen contracts** — stable into phase B; do not change shape without an ADR:
