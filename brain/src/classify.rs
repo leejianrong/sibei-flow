@@ -111,7 +111,10 @@ mod tests {
 
     #[test]
     fn snowflake_invalid_identifier_is_schema_drift() {
-        let c = classify("SQL compilation error: invalid identifier 'ORDER_TS'", "snowflake");
+        let c = classify(
+            "SQL compilation error: invalid identifier 'ORDER_TS'",
+            "snowflake",
+        );
         assert_eq!(c.failure_class, "schema_drift");
     }
 
