@@ -95,7 +95,7 @@ Repo tooling, demo, test suites, and CI/guardrails.
 - Secret scanner (gitleaks) in CI + pre-commit — *done*
 - Formalize test layering (pytest markers for fast/no-infra layer) — *done*
 - Python type checking: mypy (advisory) — *done*
-- Clear mypy errors + promote mypy to a blocking gate — *todo*
+- Clear mypy errors + promote mypy to a blocking gate — *done*
 - Frontend tooling: eslint + vitest (when a Svelte/TS UI lands) — *todo*
 
 ### Marketing Site — *done*

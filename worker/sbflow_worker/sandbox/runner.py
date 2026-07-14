@@ -269,10 +269,17 @@ class SandboxRunner:
                 args, capture_output=True, text=True, timeout=self.timeout
             )
         except subprocess.TimeoutExpired as e:
+            # `text=True` means stdout is normally str, but TimeoutExpired.stdout
+            # is typed bytes|None; normalize to str for CompletedProcess[str].
+            partial: str
+            if isinstance(e.stdout, bytes):
+                partial = e.stdout.decode(errors="replace")
+            else:
+                partial = e.stdout or ""
             return subprocess.CompletedProcess(
                 args,
                 returncode=124,
-                stdout=e.stdout or "",
+                stdout=partial,
                 stderr=f"sandbox timed out after {self.timeout}s",
             )
         except FileNotFoundError as e:  # docker CLI not present

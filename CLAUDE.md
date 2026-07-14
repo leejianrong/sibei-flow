@@ -48,7 +48,7 @@ make test-brain    # Rust seam-2 + unit tests (throwaway DB per test)
 make test-worker   # worker claim + agent-loop + REAL sandbox tests (needs Docker)
 make test-fast     # FAST no-infra lane: worker `-m "not infra"` (no DB/WH/Docker)
 make lint          # ruff check (worker)
-make typecheck     # mypy (worker) — ADVISORY (pre-existing errors; not yet blocking)
+make typecheck     # mypy (worker) — BLOCKING (type-checks clean; fails on any error)
 make down / clean  # stop the stack (clean also drops volumes)
 make logs          # tail all services · logs-brain / logs-worker for one
 ```

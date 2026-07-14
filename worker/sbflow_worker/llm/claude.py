@@ -26,7 +26,10 @@ class ClaudeProvider(LlmProvider):
     def complete(
         self, system: str, messages: list[dict[str, Any]], tools: list[ToolSpec]
     ) -> AssistantTurn:
-        resp = self.client.messages.create(
+        # The neutral loop passes hand-built message/tool dicts (ADR-0007); the
+        # SDK's create() overloads want precise TypedDicts, so mypy can't resolve
+        # the call. Overload friction only — the shapes are correct at runtime.
+        resp = self.client.messages.create(  # type: ignore[call-overload]
             model=self.model,
             max_tokens=self.max_tokens,
             system=system,

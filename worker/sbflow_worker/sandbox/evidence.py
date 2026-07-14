@@ -110,7 +110,9 @@ def _final_select_columns(sql: str) -> list[str] | None:
 
 
 def _split_top_level(s: str) -> list[str]:
-    out, depth, cur = [], 0, []
+    out: list[str] = []
+    cur: list[str] = []
+    depth = 0
     for ch in s:
         if ch == "(":
             depth += 1

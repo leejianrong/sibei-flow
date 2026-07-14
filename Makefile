@@ -109,8 +109,8 @@ test-fast: ## Fast pre-push gate: no-infra worker tests (no DB/warehouse/Docker)
 lint: ## Lint the worker (ruff) — non-mutating check
 	cd worker && uvx ruff@0.8.4 check .
 
-typecheck: ## Type-check the worker (mypy) — ADVISORY until pre-existing errors are cleared
-	cd worker && uv run --with mypy mypy sbflow_worker || true
+typecheck: ## Type-check the worker (mypy) — BLOCKING (fails on any error)
+	cd worker && uv run --with mypy mypy sbflow_worker
 
 test-brain: ## Seam-2 + unit tests (Rust, throwaway DB per test)
 	$(COMPOSE) up -d postgres

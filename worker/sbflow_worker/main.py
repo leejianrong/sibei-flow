@@ -8,17 +8,15 @@ from __future__ import annotations
 
 import time
 
-import psycopg
-
 from .agent import build_processor
 from .claim import claim_and_process
 from .config import Config
-from .db import connect_with_retry
+from .db import DictConnection, connect_with_retry
 from .notify import JobNotifier
 
 
 def wait_for_schema(
-    conn: psycopg.Connection, attempts: int = 60, delay: float = 1.0
+    conn: DictConnection, attempts: int = 60, delay: float = 1.0
 ) -> None:
     """Block until the brain has applied its migration (the table exists).
 

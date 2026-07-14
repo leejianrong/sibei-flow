@@ -11,8 +11,9 @@ from __future__ import annotations
 from typing import Any, Callable
 from uuid import UUID
 
-import psycopg
 from psycopg.types.json import Json
+
+from .db import DictConnection
 
 #: A processor turns a claimed job into a RepairResult dict.
 Processor = Callable[[dict[str, Any]], dict[str, Any]]
@@ -51,7 +52,7 @@ _WRITE_BACK_SQL = """
 """
 
 
-def claim_one(conn: psycopg.Connection, lease_seconds: int) -> dict[str, Any] | None:
+def claim_one(conn: DictConnection, lease_seconds: int) -> dict[str, Any] | None:
     """Atomically claim the next queued job and set its lease.
 
     Returns the claimed job dict, or ``None`` if the queue is empty. The claim
@@ -65,14 +66,14 @@ def claim_one(conn: psycopg.Connection, lease_seconds: int) -> dict[str, Any] | 
     return row
 
 
-def write_back(conn: psycopg.Connection, job_id: UUID, result: dict[str, Any]) -> None:
+def write_back(conn: DictConnection, job_id: UUID, result: dict[str, Any]) -> None:
     """Write the RepairResult and mark the job ``done``."""
     with conn.transaction():
         conn.execute(_WRITE_BACK_SQL, (Json(result), job_id))
 
 
 def claim_and_process(
-    conn: psycopg.Connection, lease_seconds: int, process: Processor
+    conn: DictConnection, lease_seconds: int, process: Processor
 ) -> UUID | None:
     """Claim one job, run ``process`` (the repair agent), write the result back.
     Returns the job id processed, or ``None`` when the queue is empty."""

@@ -53,8 +53,11 @@ class OpenAICompatProvider(LlmProvider):
         resp = self.client.chat.completions.create(
             model=self.model,
             max_tokens=self.max_tokens,
-            messages=oai_messages,
-            tools=oai_tools,
+            # The SDK wants precisely-typed message/tool TypedDicts; we build the
+            # provider-neutral dicts by hand (ADR-0007). Overload friction only,
+            # not a runtime mismatch.
+            messages=oai_messages,  # type: ignore[arg-type]
+            tools=oai_tools,  # type: ignore[arg-type]
         )
         msg = resp.choices[0].message
         tool_calls = [
@@ -64,6 +67,7 @@ class OpenAICompatProvider(LlmProvider):
                 input=json.loads(tc.function.arguments or "{}"),
             )
             for tc in (msg.tool_calls or [])
+            if tc.type == "function"
         ]
         return AssistantTurn(
             text=msg.content or "",

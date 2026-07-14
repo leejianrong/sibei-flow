@@ -3,19 +3,24 @@
 from __future__ import annotations
 
 import time
+from typing import Any
 
 import psycopg
 from psycopg.rows import dict_row
 
+#: Connections carry dict rows (``row_factory=dict_row``), so callers index rows
+#: by column name. This alias keeps that guarantee visible to the type checker.
+DictConnection = psycopg.Connection[dict[str, Any]]
 
-def connect(database_url: str) -> psycopg.Connection:
+
+def connect(database_url: str) -> DictConnection:
     """Open a connection with dict rows and manual transaction control."""
     return psycopg.connect(database_url, row_factory=dict_row, autocommit=False)
 
 
 def connect_with_retry(
     database_url: str, attempts: int = 30, delay: float = 1.0
-) -> psycopg.Connection:
+) -> DictConnection:
     """Connect, retrying while Postgres is still coming up (compose startup)."""
     last: Exception | None = None
     for i in range(1, attempts + 1):

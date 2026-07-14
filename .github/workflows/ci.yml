@@ -131,12 +131,10 @@ jobs:
         # it that way, so CI enforces the same standard (no local/CI drift).
         run: uvx ruff@0.8.4 format --check .
 
-      - name: mypy (advisory)
+      - name: mypy
         working-directory: worker
-        # ADVISORY: ~11 pre-existing type errors (psycopg row typing, LLM SDK
-        # overloads). Runs via the project env so imports resolve. Graduates to
-        # a hard fail once the backlog card clears the errors.
-        continue-on-error: true
+        # BLOCKING: the worker type-checks clean. Runs via the project env so
+        # imports resolve. No continue-on-error — a type error fails the job.
         run: uv run --with mypy mypy sbflow_worker
 
       # --- bring up the state + fixture warehouse Postgres --------------------
