@@ -7,7 +7,7 @@ dependencies = [
     "psycopg[binary]>=3.3.4",
     # LlmProvider backends (BYO-key; not needed by the replay provider at runtime
     # but installed so `claude`/`openai` are a config switch, not a rebuild).
-    "anthropic>=0.40",
+    "anthropic>=0.117.0",
     "openai>=2.45.0",
 ]
 
