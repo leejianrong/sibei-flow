@@ -2,6 +2,7 @@
 name = "sbflow-worker"
 version = "0.1.0"
 description = "sibei-flow repair worker (V1) — Postgres claim loop; agent stubbed (no LLM)"
+license = "Apache-2.0"
 requires-python = ">=3.12"
 dependencies = [
     "psycopg[binary]>=3.3.4",
