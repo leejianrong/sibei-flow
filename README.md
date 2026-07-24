@@ -1,23 +1,73 @@
-# sibei-flow — V1–V4
+# sibei-flow
 
-> **V1** (`docs/design/V1-plan.md`) — the walking skeleton: a failure payload
-> travels the durable spine (webhook → classify → enqueue → claim → record →
-> read-only dashboard).
-> **V2** (`docs/design/V2-plan.md`) — drift diagnosis & drafted fix: the worker
-> runs a bounded agent loop (read source → confirm drift → draft a minimal edit).
-> **V3** (`docs/design/V3-plan.md`) — **verified before you see it**: every
-> drafted fix is compiled (and sample-run when a dev connection is configured) in
-> an ephemeral Docker sandbox, so the run carries **honest evidence**
-> (compiled ✓ · sample ✓ / *not configured* · output schema unchanged ✓) plus a
-> **confidence/risk** label — and a fix that can't even compile is **suppressed to
-> `no_fix`**, never proposed.
-> **V4** (`docs/design/V4-plan.md`) — **the auto-PR**: a verified `pr_proposed`
-> result becomes a real **Pull Request** on a branch, carrying the diff, a
-> plain-English explanation, the reasoning transcript, the verification evidence,
-> and the confidence/risk label. This is the **single write action** in the whole
-> system — a brain-side poller behind a pluggable git-host seam (ADR-0011):
-> `offline` (default; push to the bundled bare remote, no creds) or `github`
-> (a real PR via a **PR-scoped** token). Merge = approve; `git revert` = rollback.
+**Auto-heal broken data pipelines.** When a dbt-in-Airflow run fails from schema
+drift or a SQL error, sibei-flow diagnoses it, verifies a fix in an ephemeral
+sandbox, and opens a reviewable **pull request** — so the fix is waiting for you
+instead of a 3am page.
+
+<!-- Demo GIF placeholder (KAN-221): drop the recording at docs/assets/hero-demo.gif
+     and uncomment the line below. Until then, `make demo` reproduces it locally. -->
+<!-- ![sibei-flow: a schema-drift failure healed into a verified pull request](docs/assets/hero-demo.gif) -->
+
+> 📹 **Demo GIF coming.** In the meantime, `make up && make demo` runs the whole
+> webhook → verified fix → PR flow on your machine in a couple of minutes.
+
+## What it is (30 seconds)
+
+A control plane that watches the pipelines you already run and sends the fix as a
+PR. One failure at a time:
+
+1. A failure webhook hits the **brain** (Rust) — it normalizes the payload,
+   classifies it (`schema_drift | code_sql | out_of_scope`), and enqueues
+   in-scope work in Postgres. Out-of-scope failures are recorded, never dispatched.
+2. The **worker** (Python) claims the job and runs a bounded agent loop — reads
+   the failing source read-only, confirms the drift against the live schema, and
+   drafts a minimal edit.
+3. Every draft is compiled in an **ephemeral Docker sandbox**. A draft that can't
+   even compile is suppressed to `no_fix` — it never reaches a PR.
+4. A verified fix becomes a real **Pull Request** on a branch, carrying the diff,
+   a plain-English explanation, the reasoning transcript, the sandbox evidence,
+   and a confidence/risk label. That PR is the **only write action** in the system.
+
+Measured end to end at **~12s webhook → PR** in our hero run — well under the
+~90s target. Everything comes up with one `docker compose up`: no cluster, no new
+DSL, and **no prod-write credentials** anywhere. Merge to approve; `git revert`
+to roll back.
+
+## Quickstart
+
+```bash
+make up      # bring up the whole stack (first build compiles the Rust brain — a few min)
+make demo    # drive it end to end: POST a schema-drift failure → drafted → verified fix
+open http://localhost:8080/   # read-only dashboard: the diff, evidence, confidence/risk
+```
+
+No API key needed — the demo and tests run on the keyless `replay` LLM provider
+by default. To use a real model, set `LLM_PROVIDER=claude` + `ANTHROPIC_API_KEY`
+(or `LLM_PROVIDER=openai` + `LLM_BASE_URL` for a local one).
+
+## Build status
+
+**V1–V5 shipped — the full v1 scope is complete.** Per-slice detail lives in
+`docs/design/` (`SLICES.md` = build order; `V1-plan.md … V5-plan.md`).
+
+- **V1** — the walking skeleton: a failure travels the durable spine
+  (webhook → classify → enqueue → claim → record → read-only dashboard).
+- **V2** — drift diagnosis & drafted fix: the worker's bounded agent loop reads
+  source, confirms drift, and drafts a minimal edit.
+- **V3** — verified before you see it: every draft is compiled (and sample-run
+  when a dev connection is configured) in an ephemeral Docker sandbox, carrying
+  honest evidence (compiled ✓ · sample ✓ / *not configured* · output schema
+  unchanged ✓) plus a confidence/risk label; a non-compiling draft is suppressed
+  to `no_fix`.
+- **V4** — the auto-PR: a verified `pr_proposed` becomes a real Pull Request via a
+  brain-side poller behind a pluggable git-host seam (ADR-0011): `offline`
+  (default; push to a bundled bare remote, no creds) or `github` (a PR-scoped token).
+- **V5** — hardening & onboarding: dedupe (`idem_key` + `ON CONFLICT`), crash
+  recovery (brain reconcile + worker lease re-claim + orphan-container sweep),
+  `LISTEN/NOTIFY` fast dispatch, the `sbflow init` / `sbflow run -- <cmd>` CLI,
+  `needs_prod_action` for non-rename drift, and PG/Snowflake/BigQuery classifier
+  expansion.
 
 ## Architecture
 
@@ -351,12 +401,16 @@ docker run --rm --network sibei-flow_default -v "$PWD":/work -w /work/worker \
   bash -c 'apt-get update -qq && apt-get install -y -qq docker.io >/dev/null; uv sync --extra dev -q; uv run pytest'
 ```
 
-## What V4 deliberately does NOT do (later slices)
+## What v1 deliberately does NOT do
 
-- No dedupe uniqueness, crash-recovery reconcile, `LISTEN/NOTIFY`, `sbflow init`,
-  `needs_prod_action` (V5). The PR opener's idempotency is a single-instance
-  `pr_url IS NULL` guard; a crash between push and record leaves a pushed branch
-  that the next poll would re-open (hardened in V5).
+Dedupe, crash-recovery reconcile, `LISTEN/NOTIFY`, `sbflow init`, and
+`needs_prod_action` all landed in V5, so the deliberate boundaries that remain are:
+
+- No autonomy: strictly propose-and-approve, never auto-merge. The confidence/risk
+  label only *enables* a future opt-in flip.
+- No multi-process warm worker pool or long-lived warm sandbox container — the
+  measured hero p50 (~12s webhook→PR) is already far under the ~90s bar, and a
+  persistent container would risk the ephemeral `--rm` isolation invariant.
 - Only the **local Docker** executor backend (ADR-0008 seam only); no VM/K8s.
 - The system holds **no** prod-write credentials; source + warehouse access is
   read-only and tier-2 builds only into a **dev/sample** schema (never prod); the
