@@ -194,4 +194,5 @@ def test_incremental_retype_yields_needs_prod_action_and_no_pr(tmp_path):
     assert result.get("evidence") is None
     rec = result["explanation"]
     assert "incremental" in rec.lower() and "amount" in rec
-    assert any("needs_prod_action" in line for line in result["transcript"])
+    assert result["transcript"]["kind"] == "lines"
+    assert any("needs_prod_action" in line for line in result["transcript"]["lines"])
