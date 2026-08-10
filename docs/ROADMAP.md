@@ -73,6 +73,39 @@ recommendations), one-command onboarding, and the ~90s latency mechanisms.
 - Classifier pattern expansion (Postgres/Snowflake/BigQuery drift/relation/type
   phrasings; unknown → drop preserved) (story 15, R2.3/R2.4) — *done*
 
+### M6: Launch Hardening (v1 public) — *in progress*
+Getting the shipped v1 in front of people: licence clarity, landing copy, the hero
+demo recording, and the Show HN post.
+- LICENSE / open-core clarity + security once-over — *done*
+- Tighten README + GitHub Pages landing copy for launch
+- Record hero demo GIF/video (webhook → PR, ~12s)
+- Draft the Show HN post + launch checklist
+
+### M7: Satay convergence — *todo*
+The decision of 2026-08-05: sibei-flow and **Satay Runtime** are two independent
+products sharing one execution engine. See
+[ADR-0012](design/adr/0012-no-second-execution-engine.md),
+[ADR-0013](design/adr/0013-transcript-tagged-union.md) and
+[ADR-0014](design/adr/0014-r61-constrains-hosting.md).
+
+Pre-launch (small, and only the first one is time-sensitive):
+- `RepairResult.transcript` → tagged union `{kind:"lines"|"journal"}` (ADR-0013),
+  worker + `body.rs` + fixtures. **Do this before the Show HN**: after it, the
+  frozen contract has third-party readers and the change becomes a migration.
+
+Post-launch, in dependency order:
+- Port the repair loop onto Satay **at the multi-candidate-repair boundary** —
+  "draft three candidates, keep the best evidence". Needs Satay's collect-mode
+  fan-out (KAN-473 there). V5's lease re-claim and orphan sweep stay as they are.
+- Emit `kind:"journal"` transcripts; render the PR body from the journal.
+- Per-run cost accounting, free once the loop is a Satay workflow.
+- **Fork-and-replay as verification tier 3** — fork the repair run at the failing
+  call, replay the candidate fix against the recorded inputs. The one thing in this
+  roadmap a better-funded competitor cannot copy quickly, and the reason the port
+  is worth doing at all.
+- Hosted app tier on Satay's shared plane, R6.1-preserving (ADR-0014): worker stays
+  on the customer's runner, only the redacted journal crosses.
+
 ## Ongoing (cross-cutting, no milestone)
 
 ### Product Design & Shaping — *done*
@@ -103,15 +136,11 @@ The externally-shipped GitHub Pages landing site.
 - GitHub Pages landing page
 - Pages deploy workflow (auto-enable)
 
-## Board summary
+## Board
 
-| | Count |
-|---|---|
-| Epics | 8 (5 milestones + 3 Ongoing) |
-| Stories done | 41 |
-| Stories todo | 11 |
-| Stories in progress | 0 |
-| **Total stories** | **52** |
+Board: **`sibei-flow` (id `7`)** on Pandan. Read and update it with the `pandan`
+CLI (see the `pandan` skill); `pandan epic list --board 7` is the live status.
 
-Board: `sibei-flow` (id `7`) on Simple Kanban. Recreate/update with the `kan`
-CLI (see the `simple-kanban` skill).
+Deliberately no story counts here: they go stale on the next card and have already
+done so once. The board is the source of truth for progress; this document is the
+source of truth for *why* the milestones exist.

@@ -80,10 +80,11 @@ def test_rename_drift_produces_minimal_unverified_diff():
     assert diff.count("\n+") <= 3 and MODEL in diff
     # Explanation names the drift; transcript present; unverified (no evidence).
     assert "cust_id" in result["explanation"]
-    assert result["transcript"]
+    assert result["transcript"]["kind"] == "lines"
+    assert result["transcript"]["lines"]
     assert result["evidence"] is None
     # The transcript shows the real warehouse read confirming the drift.
-    assert any("cust_id" in line for line in result["transcript"])
+    assert any("cust_id" in line for line in result["transcript"]["lines"])
 
 
 def test_diff_guard_rejects_out_of_scope_edit_then_redrafts():
@@ -126,7 +127,7 @@ def test_diff_guard_rejects_out_of_scope_edit_then_redrafts():
     assert result["outcome"] == "pr_proposed"
     assert "cust_id," in result["diff"]
     assert "schema.yml" not in result["diff"]  # the out-of-scope edit never landed
-    assert any("diff guard rejected" in line for line in result["transcript"])
+    assert any("diff guard rejected" in line for line in result["transcript"]["lines"])
 
 
 def test_loop_stops_at_cap_and_returns_no_fix():
@@ -142,5 +143,10 @@ def test_loop_stops_at_cap_and_returns_no_fix():
     assert "diff" not in result
     # Capped at 3 provider turns (3 read_file calls in the transcript).
     assert (
-        sum(1 for line in result["transcript"] if line.startswith("→ read_file")) == 3
+        sum(
+            1
+            for line in result["transcript"]["lines"]
+            if line.startswith("→ read_file")
+        )
+        == 3
     )
