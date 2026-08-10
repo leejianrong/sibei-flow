@@ -54,19 +54,7 @@ pub fn render_body(job: &JobRow) -> String {
         get("factors"),
     ));
 
-    if let Some(transcript) = get("transcript").and_then(Value::as_array) {
-        if !transcript.is_empty() {
-            let joined = transcript
-                .iter()
-                .filter_map(Value::as_str)
-                .collect::<Vec<_>>()
-                .join("\n");
-            s.push_str("<details>\n<summary>🧠 Reasoning transcript</summary>\n\n");
-            s.push_str("```\n");
-            s.push_str(joined.trim_end());
-            s.push_str("\n```\n\n</details>\n\n");
-        }
-    }
+    s.push_str(&render_transcript(get("transcript")));
 
     s.push_str("---\n");
     s.push_str(
@@ -78,6 +66,57 @@ pub fn render_body(job: &JobRow) -> String {
 }
 
 /// The verification evidence table (honest disclosure of what actually ran).
+/// Render `RepairResult.transcript`, a **discriminated** union (ADR-0013):
+///
+/// ```text
+/// transcript?: {"kind": "lines",   "lines": [str]}
+///            | {"kind": "journal", "run_id": str, "ref": str}
+/// ```
+///
+/// Branch on `kind` and never sniff the structure: the whole point of tagging
+/// the union is that a reader cannot guess wrong. An unknown `kind` renders
+/// nothing rather than guessing, so a newer worker emitting a third arm degrades
+/// to a PR without a transcript instead of a PR with a mangled one.
+///
+/// The `journal` arm is not produced by any worker yet. It arrives when the
+/// repair loop is ported onto Satay (ADR-0012, decision 4), at which point this
+/// becomes a render *of the journal* rather than of a parallel artifact that can
+/// drift from what the run actually did.
+fn render_transcript(t: Option<&Value>) -> String {
+    let Some(t) = t else {
+        return String::new();
+    };
+    let body = match t.get("kind").and_then(Value::as_str) {
+        Some("lines") => {
+            let lines = t.get("lines").and_then(Value::as_array);
+            let joined = lines
+                .map(|l| {
+                    l.iter()
+                        .filter_map(Value::as_str)
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                })
+                .unwrap_or_default();
+            if joined.trim().is_empty() {
+                return String::new();
+            }
+            format!("```\n{}\n```\n", joined.trim_end())
+        }
+        Some("journal") => {
+            // Placeholder until the port lands: name the run so a reviewer can
+            // find it, rather than inventing a rendering of a journal we cannot
+            // read from here.
+            let run_id = t.get("run_id").and_then(Value::as_str).unwrap_or("unknown");
+            format!(
+                "Recorded as Satay run `{run_id}`. Replay it locally with \
+                 `satay runs show {run_id}`.\n"
+            )
+        }
+        _ => return String::new(),
+    };
+    format!("<details>\n<summary>🧠 Reasoning transcript</summary>\n\n{body}\n</details>\n\n")
+}
+
 fn render_evidence(ev: Option<&Value>) -> String {
     let ev = match ev {
         Some(v) if !v.is_null() => v,
@@ -188,7 +227,7 @@ mod tests {
                 "outcome": "pr_proposed",
                 "diff": "--- a/models/marts/orders.sql\n+++ b/models/marts/orders.sql\n@@\n-    customer_id,\n+    cust_id as customer_id,\n",
                 "explanation": "Upstream renamed customer_id to cust_id; aliased it back.",
-                "transcript": ["assistant: reading orders.sql", "→ edit_file(...)"],
+                "transcript": {"kind": "lines", "lines": ["assistant: reading orders.sql", "→ edit_file(...)"]},
                 "evidence": {
                     "tier1": {"ran": true, "passed": true, "log": "OK"},
                     "tier2": {"ran": true, "passed": true, "log": "10000 rows"},
@@ -248,5 +287,52 @@ mod tests {
         let b = render_body(&job);
         assert!(b.contains("⚠️ not configured"));
         assert!(b.contains("⚠️ undetermined"));
+    }
+
+    // --- RepairResult.transcript, the ADR-0013 discriminated union -----------
+
+    #[test]
+    fn transcript_lines_arm_renders_the_lines() {
+        let t = serde_json::json!({"kind": "lines", "lines": ["a", "b"]});
+        let out = render_transcript(Some(&t));
+        assert!(out.contains("🧠 Reasoning transcript"));
+        assert!(out.contains("a\nb"));
+    }
+
+    #[test]
+    fn transcript_journal_arm_names_the_run() {
+        // Not produced by any worker yet; it arrives with the Satay port
+        // (ADR-0012 decision 4). The brain must already handle it, because the
+        // contract widened first on purpose.
+        let t = serde_json::json!({"kind": "journal", "run_id": "a3f2", "ref": "x"});
+        let out = render_transcript(Some(&t));
+        assert!(out.contains("🧠 Reasoning transcript"));
+        assert!(out.contains("a3f2"));
+        assert!(out.contains("satay runs show a3f2"));
+    }
+
+    #[test]
+    fn transcript_unknown_kind_renders_nothing_rather_than_guessing() {
+        // A newer worker emitting a third arm should degrade to a PR with no
+        // transcript, never a PR with a mangled one.
+        let t = serde_json::json!({"kind": "something_new", "payload": [1, 2]});
+        assert_eq!(render_transcript(Some(&t)), "");
+    }
+
+    #[test]
+    fn transcript_is_never_sniffed_structurally() {
+        // The pre-ADR-0013 shape was a bare array. Untagged input must render
+        // nothing: discriminating on `kind` is the contract, and falling back to
+        // structural sniffing would quietly re-admit the ambiguity the tag exists
+        // to remove.
+        let legacy = serde_json::json!(["assistant: hi", "→ edit_file(...)"]);
+        assert_eq!(render_transcript(Some(&legacy)), "");
+        assert_eq!(render_transcript(None), "");
+    }
+
+    #[test]
+    fn transcript_empty_lines_render_nothing() {
+        let t = serde_json::json!({"kind": "lines", "lines": []});
+        assert_eq!(render_transcript(Some(&t)), "");
     }
 }

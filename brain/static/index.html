@@ -247,8 +247,17 @@
       if (res.diff) {
         sections += `<div class="card"><h3>Drafted diff (minimal)</h3><pre class="diff">${renderDiff(res.diff)}</pre></div>`;
       }
-      if (res.transcript && res.transcript.length) {
-        sections += `<div class="card"><h3>Reasoning transcript</h3><pre>${esc(res.transcript.join("\n"))}</pre></div>`;
+      // RepairResult.transcript is a discriminated union (ADR-0013): branch on
+      // `kind`, never sniff the shape. An unknown kind renders nothing rather
+      // than guessing, so a newer worker cannot produce a mangled panel here.
+      if (res.transcript && res.transcript.kind === "lines") {
+        const lines = res.transcript.lines || [];
+        if (lines.length) {
+          sections += `<div class="card"><h3>Reasoning transcript</h3><pre>${esc(lines.join("\n"))}</pre></div>`;
+        }
+      } else if (res.transcript && res.transcript.kind === "journal") {
+        const runId = res.transcript.run_id || "unknown";
+        sections += `<div class="card"><h3>Reasoning transcript</h3><pre>${esc("Recorded as Satay run " + runId + "\nReplay it locally with: satay runs show " + runId)}</pre></div>`;
       }
 
       app.innerHTML = `

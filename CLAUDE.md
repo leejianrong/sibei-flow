@@ -24,6 +24,37 @@ see [`README.md`](README.md) and [`docs/design/`](docs/design/) for depth
   the ~90s bar, and a persistent container would risk the ephemeral `--rm`
   isolation invariant.
 
+## Direction (decided 2026-08-05 — read before proposing architecture)
+
+sibei-flow and **Satay Runtime** (`leejianrong/satay-runtime`, same author) are two
+**independent products that share one execution engine.** Three ADRs set the
+boundary, and they change what you are allowed to build here:
+
+- **[ADR-0012](docs/design/adr/0012-no-second-execution-engine.md) — capability
+  freeze.** sibei-flow's own durable state may model **repair jobs and nothing
+  else.** Workflows, task abstractions, authoring DSLs, durable timers/sleep,
+  event waits, fan-out with partial-completion recovery, child workflows, replay,
+  journals, forking and run comparison are **permanently out of scope here** and
+  belong to Satay. Phase B's "unified state machine" is withdrawn. **A PR adding
+  any of those violates this ADR** — reject it, or supersede the ADR first.
+  What stays exactly as V5 shipped it: `repair_jobs`, lease/claim, `idem_key`
+  dedupe, reconcile, orphan sweep, `LISTEN/NOTIFY`, PR-opener claim.
+- **[ADR-0013](docs/design/adr/0013-transcript-tagged-union.md) — the transcript
+  contract widens** to `{kind:"lines"|"journal", …}` before the v1 launch. The
+  worker keeps emitting `lines`; this only buys the option.
+- **[ADR-0014](docs/design/adr/0014-r61-constrains-hosting.md) — R6.1 constrains
+  hosting.** Hosting is not an exemption from the credential invariant. A hosted
+  sibei-flow holds **no warehouse credentials of any tier** and runs **no customer
+  dbt** on our infra; execution stays on the customer's runner. Watch for the
+  failure mode: a pluggable credential store "for the hosted case", or the
+  invariant restated as "no prod-write credentials *in self-hosted mode*". That
+  qualifier is how the invariant dies.
+
+The repair loop is **not** being ported yet. It lands when sibei-flow grows
+multi-candidate repair ("draft three, keep the best evidence"), which needs
+collect-mode fan-out that Satay is building anyway. Until then, leave the loop and
+V5's crash-recovery path alone.
+
 ## What it is
 
 A control plane that auto-heals broken data pipelines. A failure webhook hits
@@ -110,17 +141,24 @@ branch (0 approvals required, so you can self-merge).
 
 ## Invariants to protect (do not break)
 
-- **Frozen contracts** — stable into phase B; do not change shape without an ADR:
+- **Frozen contracts** — do not change shape without an ADR:
   - `Failure` (webhook in): `{repo, run_id, task_id, node_uid, error_text,
     adapter, run_results_ref?, source}`.
   - `RepairResult` (worker out): `{outcome, diff?, explanation?, transcript?,
-    evidence?, confidence?, risk_class?, factors?}`.
+    evidence?, confidence?, risk_class?, factors?}`, where `transcript?` is the
+    tagged union `{kind:"lines", lines:[str]} | {kind:"journal", run_id, ref}`
+    (ADR-0013). The worker emits only `lines` today; readers must handle both and
+    must discriminate on `kind`, never by sniffing the structure.
   - **Agent tool contract:** `read_file(path, ref)`, `get_schema(source)`,
     `edit_file(path, old, new)`, `run_sandbox(select?)`.
+- **The capability freeze** — durable state models repair jobs only; everything
+  else durable belongs to Satay (ADR-0012, and the Direction section above).
 - **No fix reaches a PR without passing tier-1 compile** — `pr_proposed` is
   emitted *only* when `tier1.passed`; otherwise `no_fix` (the compile gate).
 - **Out-of-scope failures are never dispatched** — they are recorded `done` /
   `out_of_scope`, never queued to the worker.
-- **The system holds NO prod-write credentials** — source + warehouse access is
-  read-only; tier-2 builds only into a dev/sample schema (never prod); the web UI
-  has zero write actions.
+- **The system holds NO prod-write credentials (R6.1)** — source + warehouse
+  access is read-only; tier-2 builds only into a dev/sample schema (never prod);
+  the web UI has zero write actions. **This holds for a hosted deployment too**,
+  where it additionally forbids holding warehouse credentials at all and running
+  customer dbt on our infrastructure (ADR-0014).
