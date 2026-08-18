@@ -39,7 +39,28 @@ fix it confidently, say so plainly instead of guessing.
 """
 
 #: Truncate long tool outputs in the transcript so it stays legible.
+#: Lossy by construction, and one of the two reasons ADR-0013 exists: the
+#: ``get_schema`` output that justifies the whole fix can be clipped at exactly
+#: the point a reviewer looks. The ``journal`` arm below has no such limit,
+#: because Satay spills payloads over 256 KiB to content-addressed blobs.
 _TRANSCRIPT_CLIP = 1200
+
+
+def lines_transcript(lines: list[str]) -> dict[str, Any]:
+    """Wrap hand-built transcript lines in the ``RepairResult.transcript`` union.
+
+    The frozen contract (ADR-0013) is a **discriminated** union::
+
+        transcript?: {"kind": "lines",   "lines": list[str]}
+                   | {"kind": "journal", "run_id": str, "ref": str}
+
+    Readers must branch on ``kind`` and never sniff the structure. The worker
+    emits only the ``lines`` arm today; the ``journal`` arm arrives when the
+    repair loop is ported onto Satay (ADR-0012, decision 4), at which point the
+    PR body becomes a render of the run's journal rather than a parallel artifact
+    that can drift from what actually happened.
+    """
+    return {"kind": "lines", "lines": lines}
 
 
 def build_initial_prompt(task: dict[str, Any]) -> str:
@@ -130,7 +151,7 @@ def run_repair(
         return {
             "outcome": "needs_prod_action",
             "explanation": recommendation,
-            "transcript": transcript,
+            "transcript": lines_transcript(transcript),
             "evidence": None,
         }
 
@@ -139,7 +160,7 @@ def run_repair(
         return {
             "outcome": "no_fix",
             "explanation": last_text or "Could not produce a confident fix.",
-            "transcript": transcript,
+            "transcript": lines_transcript(transcript),
             "evidence": None,
         }
 
@@ -152,7 +173,7 @@ def run_repair(
             "outcome": "pr_proposed",
             "diff": diff,
             "explanation": explanation,
-            "transcript": transcript,
+            "transcript": lines_transcript(transcript),
             "evidence": None,
             "confidence": None,
             "risk_class": None,
@@ -248,7 +269,7 @@ def _verify_and_gate(
                 explanation
                 + "\n\nThis draft did not pass tier-1 compile, so it was not proposed."
             ),
-            "transcript": transcript,
+            "transcript": lines_transcript(transcript),
             "evidence": evidence,
             "confidence": scored["confidence"],
             "risk_class": scored["risk_class"],
@@ -259,7 +280,7 @@ def _verify_and_gate(
         "outcome": "pr_proposed",
         "diff": diff,
         "explanation": explanation,
-        "transcript": transcript,
+        "transcript": lines_transcript(transcript),
         "evidence": evidence,
         "confidence": scored["confidence"],
         "risk_class": scored["risk_class"],

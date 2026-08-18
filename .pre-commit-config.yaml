@@ -14,8 +14,25 @@
 #
 # Layering (see .claude/skills/dev-guardrails/references/git-hooks.md):
 #   pre-commit = FAST: hygiene + ruff (worker/) + gitleaks + cargo fmt --check (brain/)
-#   pre-push   = fast local gate: ruff check + cargo fmt --check
-#                (+ `uv run pytest -m "not infra"` once markers land — see below)
+#   pre-push   = fast local gate: make lint + make typecheck + make test-fast
+#                + cargo fmt --check (brain/)
+#
+# The pre-push hooks call `make` targets rather than re-spelling their commands.
+# The Makefile is the source of truth, CI runs the same targets, so
+# hook == make == CI by construction. Re-spelled commands drift silently, and
+# they already had: both inlined pre-push commands were BROKEN and nobody knew,
+# because this config was written but never installed anywhere.
+#   * `uvx ruff check worker/` floated to the LATEST ruff and ran from the repo
+#     root, reporting 33 errors that `make lint` (`uvx ruff@0.8.4 check .` from
+#     worker/) does not. An unpinned linter in a blocking gate means an upstream
+#     release turns every push red for reasons CI never sees.
+#   * `uv run pytest -m "not infra"` omitted the `uv sync --extra dev` that
+#     installs pytest, so it died with "Failed to spawn: pytest".
+#
+# Secret scanning stays on the COMMIT stage, not pre-push: it is fast, and
+# catching a credential before it enters a commit beats catching it before it
+# leaves the machine. CI's `security` job is the authoritative scan (full
+# history + working tree).
 #
 # NOTE on cargo: this repo has no guaranteed local Rust toolchain — tests run in
 # throwaway containers (see Makefile), so cargo may only exist inside the brain
@@ -55,18 +72,6 @@ repos:
     hooks:
       - id: gitleaks        # block committed secrets
 
-  # --- Python type check: mypy (pre-push stage, BLOCKING) -------------
-  # Runs via the project env (uv run --with) so imports resolve. The worker
-  # type-checks clean, so mypy is a blocking pre-push gate (same as CI).
-  - repo: local
-    hooks:
-      - id: mypy
-        name: mypy (worker/)
-        entry: bash -c 'cd worker && uv run --with mypy mypy sbflow_worker'
-        language: system
-        pass_filenames: false
-        stages: [pre-push]
-
   # --- Rust format check, scoped to brain/ (commit stage) -------------
   # local `system` hook — see the "NOTE on cargo" block above re: availability.
   - repo: local
@@ -80,13 +85,33 @@ repos:
         stages: [pre-commit]
 
   # --- pre-push fast gate --------------------------------------------
-  # Runs on `git push`, not every commit. Non-mutating checks only.
-  # Safe today: ruff check (worker/) + cargo fmt --check (brain/).
+  # Runs on `git push`, not every commit. Non-mutating checks only, and every
+  # one delegates to the Makefile so it cannot drift from `make` or CI (see the
+  # header). Bypass the whole stage with `git push --no-verify`, or one hook
+  # with e.g. `SKIP=cargo-fmt-check-push git push`.
+  #
+  # Deliberately NOT here: the `infra`-marked worker tests and the brain suite.
+  # Both need Postgres, the fixture warehouse and the Docker socket, which makes
+  # them a `make test` / CI concern rather than a push gate.
   - repo: local
     hooks:
-      - id: ruff-check-push
-        name: ruff check (worker/) [pre-push]
-        entry: uvx ruff check worker/
+      - id: lint-push
+        name: make lint — ruff@0.8.4 (worker/) [pre-push]
+        entry: make lint
+        language: system
+        pass_filenames: false
+        stages: [pre-push]
+
+      - id: typecheck-push
+        name: make typecheck — mypy, BLOCKING (worker/) [pre-push]
+        entry: make typecheck
+        language: system
+        pass_filenames: false
+        stages: [pre-push]
+
+      - id: test-fast-push
+        name: make test-fast — pytest -m "not infra" (worker/) [pre-push]
+        entry: make test-fast
         language: system
         pass_filenames: false
         stages: [pre-push]
@@ -94,15 +119,6 @@ repos:
       - id: cargo-fmt-check-push
         name: cargo fmt --check (brain/) [pre-push]
         entry: cargo fmt --check --manifest-path brain/Cargo.toml
-        language: system
-        pass_filenames: false
-        stages: [pre-push]
-
-      # The `-m "not infra"` pytest markers have landed (Track C), so the fast,
-      # no-infra test lane runs on push:
-      - id: pytest-fast
-        name: pytest -m "not infra" (worker/) [pre-push]
-        entry: bash -c 'cd worker && uv run pytest -m "not infra"'
         language: system
         pass_filenames: false
         stages: [pre-push]
