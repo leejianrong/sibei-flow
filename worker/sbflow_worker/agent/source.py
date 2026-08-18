@@ -18,8 +18,12 @@ class LocalSourceProvider:
         """Read a file relative to the repo root. `ref` is accepted for
         contract stability (git ref) but V2 reads the working tree."""
         target = (self.root / path).resolve()
-        # Prevent path traversal outside the read-only checkout.
-        if not str(target).startswith(str(self.root)):
+        # Prevent path traversal outside the read-only checkout. A plain
+        # `str(target).startswith(str(self.root))` is a prefix match, not a
+        # path-boundary check — it would wrongly allow a sibling directory
+        # whose name happens to extend the root's (e.g. root `/repo` letting
+        # `/repo-secret/x` through). `is_relative_to` is boundary-correct.
+        if not target.is_relative_to(self.root):
             raise ValueError(f"path escapes repo root: {path}")
         if not target.is_file():
             raise FileNotFoundError(f"no such file in repo: {path}")
