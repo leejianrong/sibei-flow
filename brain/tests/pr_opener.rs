@@ -107,7 +107,7 @@ async fn github_backend_builds_a_correct_authenticated_request() {
     });
     let api_base = format!("http://{addr}");
 
-    let host = GithubHost::new("ghp_testtoken".into(), None, api_base);
+    let host = GithubHost::new("ghp_testtoken".into(), "acme/analytics".into(), api_base);
     let req = sample_req();
     // reqwest::blocking must not run on the async runtime thread.
     let url = tokio::task::spawn_blocking(move || host.create_pull("acme/analytics", &req))
@@ -264,6 +264,36 @@ fn pr_opener_config_carries_no_prodwrite_credential() {
     assert!(build_host(&gh).is_err(), "github requires a token");
     gh.github_token = Some("ghp_pr_scoped_only".into());
     assert_eq!(build_host(&gh).unwrap().kind(), "github");
+}
+
+/// KAN-926 / KAN-223: GIT_HOST=github with a token but no GIT_REPO must fail
+/// fast — never silently build a host that would fall back to the
+/// unauthenticated webhook payload's own `repo` field.
+#[test]
+fn github_without_git_repo_is_a_config_error() {
+    let cfg = PrOpenerConfig {
+        git_host: "github".into(),
+        base_branch: "main".into(),
+        branch_prefix: "sbflow/fix".into(),
+        poll_interval_secs: 2.0,
+        remote_url: "git://git-remote:9418/analytics.git".into(),
+        github_token: Some("ghp_pr_scoped_only".into()),
+        github_repo: None,
+        github_api_base: "https://api.github.com".into(),
+    };
+    let err = match build_host(&cfg) {
+        Err(e) => e,
+        Ok(_) => panic!("GIT_HOST=github without GIT_REPO must error"),
+    };
+    assert!(
+        err.to_string().contains("GIT_REPO"),
+        "error should name the missing GIT_REPO: {err}"
+    );
+
+    // Setting GIT_REPO is enough to make it build.
+    let mut with_repo = cfg;
+    with_repo.github_repo = Some("acme/analytics".into());
+    assert_eq!(build_host(&with_repo).unwrap().kind(), "github");
 }
 
 /// A drafted diff that touches a path outside the model tree would still only

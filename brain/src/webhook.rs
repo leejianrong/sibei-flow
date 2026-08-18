@@ -5,13 +5,27 @@
 //! in-scope job (`state = queued`) or records a dropped one (`state = done`,
 //! `outcome = out_of_scope`) **without dispatch**.
 
-use axum::{extract::State, http::StatusCode, Json};
+use axum::{
+    body::Bytes,
+    extract::State,
+    http::{HeaderMap, StatusCode},
+    Json,
+};
+use hmac::{Hmac, KeyInit, Mac};
 use sha2::{Digest, Sha256};
-use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::classify::classify;
 use crate::models::Failure;
+use crate::AppState;
+
+/// `X-Sbflow-Signature: sha256=<hex hmac>` (KAN-926).
+const SIGNATURE_HEADER: &str = "x-sbflow-signature";
+/// `X-Sbflow-Timestamp: <unix seconds>`, signed together with the raw body.
+const TIMESTAMP_HEADER: &str = "x-sbflow-timestamp";
+/// Reject a request whose timestamp is more than this many seconds away from
+/// now, in either direction (clock skew allowance).
+const MAX_SKEW_SECS: i64 = 300;
 
 /// Response body for an accepted webhook.
 #[derive(serde::Serialize)]
@@ -27,10 +41,24 @@ pub struct WebhookAck {
 }
 
 /// Handler for `POST /webhook`.
+///
+/// Takes the raw body bytes (not a `Json<Value>` extractor) because HMAC
+/// verification (KAN-926) must run over the exact bytes the caller signed,
+/// not a re-serialized copy — JSON re-serialization is not guaranteed to
+/// round-trip byte-for-byte (key order, whitespace, number formatting).
 pub async fn receive(
-    State(pool): State<PgPool>,
-    Json(body): Json<serde_json::Value>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    raw_body: Bytes,
 ) -> Result<(StatusCode, Json<WebhookAck>), (StatusCode, String)> {
+    if let Some(secret) = &state.webhook_secret {
+        verify_signature(secret, &headers, &raw_body)?;
+    }
+    let pool = state.pool;
+
+    let body: serde_json::Value = serde_json::from_slice(&raw_body)
+        .map_err(|e| (StatusCode::BAD_REQUEST, format!("invalid JSON body: {e}")))?;
+
     let failure = normalize(&body);
     let idem_key = idem_key(&failure);
     let classification = classify(&failure.error_text, &failure.adapter);
@@ -140,6 +168,55 @@ pub async fn receive(
             deduplicated: true,
         }),
     ))
+}
+
+/// Verify the `X-Sbflow-Signature` / `X-Sbflow-Timestamp` pair against the raw
+/// request body (KAN-926). Enforced only when the caller (`receive`) has a
+/// configured secret — this function is never reached otherwise.
+///
+/// Rejects with `401 Unauthorized` — consistently, for every failure mode —
+/// when: either header is missing or malformed, the timestamp is outside the
+/// `MAX_SKEW_SECS` window, or the signature doesn't match. The comparison is
+/// constant-time via `hmac::Mac::verify_slice` (no hand-rolled byte compare).
+fn verify_signature(
+    secret: &str,
+    headers: &HeaderMap,
+    raw_body: &[u8],
+) -> Result<(), (StatusCode, String)> {
+    let bad = |msg: &str| (StatusCode::UNAUTHORIZED, msg.to_string());
+
+    let sig_header = headers
+        .get(SIGNATURE_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .ok_or_else(|| bad("missing X-Sbflow-Signature header"))?;
+    let ts_header = headers
+        .get(TIMESTAMP_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .ok_or_else(|| bad("missing X-Sbflow-Timestamp header"))?;
+
+    let timestamp: i64 = ts_header
+        .parse()
+        .map_err(|_| bad("X-Sbflow-Timestamp must be a unix-seconds integer"))?;
+    let now = chrono::Utc::now().timestamp();
+    if (now - timestamp).abs() > MAX_SKEW_SECS {
+        return Err(bad("X-Sbflow-Timestamp is outside the allowed window"));
+    }
+
+    let sig_hex = sig_header
+        .strip_prefix("sha256=")
+        .ok_or_else(|| bad("X-Sbflow-Signature must be of the form sha256=<hex>"))?;
+    let sig_bytes = hex::decode(sig_hex).map_err(|_| bad("X-Sbflow-Signature is not valid hex"))?;
+
+    // Signed message is `{timestamp}.{raw_body}`, built over raw bytes (not a
+    // formatted String) so a non-UTF8 body still verifies correctly.
+    let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes())
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    mac.update(ts_header.as_bytes());
+    mac.update(b".");
+    mac.update(raw_body);
+
+    mac.verify_slice(&sig_bytes)
+        .map_err(|_| (StatusCode::UNAUTHORIZED, "signature mismatch".to_string()))
 }
 
 /// Idempotency key `hash(repo, run_id, task_id, node_uid)` (B-S7).

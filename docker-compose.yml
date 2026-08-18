@@ -31,7 +31,11 @@ services:
       # to the bundled bare git remote and record branch + compare as the "PR".
       # No credentials, fully offline. Set GIT_HOST=github + GITHUB_TOKEN +
       # GIT_REPO to open a REAL PR instead. GITHUB_TOKEN must be PR-scoped only —
-      # the system holds NO prod-write credential anywhere (R6.1).
+      # the system holds NO prod-write credential anywhere (R6.1). GIT_REPO is
+      # MANDATORY under GIT_HOST=github (KAN-926 / KAN-223) — the brain fails
+      # fast at startup rather than falling back to the webhook payload's own
+      # `repo` field, which an unauthenticated caller could otherwise use to
+      # redirect the PR-scoped token at an arbitrary repo.
       GIT_HOST: "${GIT_HOST:-offline}"
       GIT_REMOTE_URL: "${GIT_REMOTE_URL:-git://git-remote:9418/analytics.git}"
       GIT_BASE_BRANCH: "${GIT_BASE_BRANCH:-main}"
@@ -39,6 +43,16 @@ services:
       GITHUB_TOKEN: "${GITHUB_TOKEN:-}"
       GITHUB_API_URL: "${GITHUB_API_URL:-https://api.github.com}"
       PR_POLL_INTERVAL: "${PR_POLL_INTERVAL:-2.0}"
+      # KAN-926: shared secret for HMAC-SHA256 signing of POST /webhook
+      # requests (X-Sbflow-Signature: sha256=<hex hmac>, X-Sbflow-Timestamp:
+      # <unix seconds>, 300s skew window). Unset by default so `make demo` /
+      # the offline flow keep working with zero setup — the webhook stays
+      # unauthenticated exactly as before. Set this (and configure the sender
+      # — Airflow/dbt enrollment or your own caller — to sign with the same
+      # secret) to require signed requests, especially whenever GIT_HOST=github
+      # is enabled, since an unauthenticated /webhook can otherwise be used to
+      # trigger a real PR.
+      SBFLOW_WEBHOOK_SECRET: "${SBFLOW_WEBHOOK_SECRET:-}"
     ports:
       - "8080:8080"
     depends_on:

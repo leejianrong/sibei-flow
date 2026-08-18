@@ -62,7 +62,11 @@ pub struct PrOpenerConfig {
     pub remote_url: String,
     /// github backend: PR-scoped token (never a prod-write credential).
     pub github_token: Option<String>,
-    /// github backend: `owner/name` (falls back to the failure payload's repo).
+    /// github backend: `owner/name`. Required when `git_host == "github"`
+    /// (KAN-926 / KAN-223) — `build_host` fails fast if unset rather than
+    /// falling back to the unauthenticated webhook payload's own `repo`
+    /// field, which would let an unauthenticated caller redirect the
+    /// PR-scoped `GITHUB_TOKEN` at an arbitrary repo.
     pub github_repo: Option<String>,
     /// github backend: API base (overridable so tests hit a mock host).
     pub github_api_base: String,
@@ -105,9 +109,15 @@ pub fn build_host(cfg: &PrOpenerConfig) -> Result<Arc<dyn GitHost>> {
                 .github_token
                 .clone()
                 .ok_or_else(|| anyhow::anyhow!("GIT_HOST=github requires GITHUB_TOKEN"))?;
+            // KAN-926: GIT_REPO is mandatory under GIT_HOST=github — no
+            // fallback to the unauthenticated webhook payload's `repo` field.
+            let repo = cfg
+                .github_repo
+                .clone()
+                .ok_or_else(|| anyhow::anyhow!("GIT_HOST=github requires GIT_REPO"))?;
             Ok(Arc::new(GithubHost::new(
                 token,
-                cfg.github_repo.clone(),
+                repo,
                 cfg.github_api_base.clone(),
             )))
         }
