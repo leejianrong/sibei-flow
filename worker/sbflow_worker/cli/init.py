@@ -2,9 +2,11 @@
 
 Walks a new user through the minimal setup: repo, brain webhook URL, adapter,
 and the OPTIONAL secrets — a read-only / PR-scoped git token, an LLM key
-(optional; empty keeps the keyless ``replay`` provider), and an OPTIONAL
-read-only dev/sample warehouse DSN for tier-2 sample builds. Writes a TOML
-config (default ``~/.config/sbflow/config.toml``, 0600).
+(optional; empty keeps the keyless ``replay`` provider), an OPTIONAL
+read-only dev/sample warehouse DSN for tier-2 sample builds, and an OPTIONAL
+webhook signing secret (KAN-929) needed only when the brain has
+``SBFLOW_WEBHOOK_SECRET`` set. Writes a TOML config (default
+``~/.config/sbflow/config.toml``, 0600).
 
 **Trust posture is load-bearing (CLAUDE.md R6.1):** this flow only ever asks for
 READ-ONLY / PR-scoped credentials and says so at every secret prompt. It never
@@ -83,6 +85,12 @@ def cmd_init(
         prompt, "Sample warehouse DSN", base.sample_warehouse_url
     )
 
+    out("")
+    out("Optional webhook signing secret — only needed if the brain has")
+    out("SBFLOW_WEBHOOK_SECRET set. Leave blank if it doesn't, or supply via")
+    out("$SBFLOW_WEBHOOK_SECRET. Must match the brain's secret exactly.")
+    webhook_secret = _ask(prompt, "Webhook signing secret", base.webhook_secret)
+
     cfg = CliConfig(
         repo=repo or "unknown",
         webhook_url=webhook_url,
@@ -91,6 +99,7 @@ def cmd_init(
         git_token=git_token,
         llm_api_key=llm_api_key,
         sample_warehouse_url=sample_warehouse_url,
+        webhook_secret=webhook_secret,
     )
 
     target = Path(config_path) if config_path else default_user_config_path()
@@ -106,6 +115,7 @@ def cmd_init(
     out(
         f"  sample DSN   = {'set (read-only dev/sample)' if cfg.sample_warehouse_url else 'not set'}"
     )
+    out(f"  webhook secret = {'set' if cfg.webhook_secret else 'not set'}")
     out("")
     out("Next: enroll a pipeline (one line) — see snippets/ for the Airflow")
     out("callback and dbt hook, or wrap a cron step with `sbflow run -- <cmd>`.")

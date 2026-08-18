@@ -18,8 +18,11 @@ and an explicit ``--config`` beats everything:
 4. ``$XDG_CONFIG_HOME/sbflow/config.toml`` (default ``~/.config/sbflow/…``)
 
 Any individual field can still be overridden at call time by an env var
-(``SBFLOW_REPO``, ``SBFLOW_WEBHOOK_URL``, ``SBFLOW_ADAPTER``) so containers and
-CI don't need a file at all.
+(``SBFLOW_REPO``, ``SBFLOW_WEBHOOK_URL``, ``SBFLOW_ADAPTER``,
+``SBFLOW_WEBHOOK_SECRET``) so containers and CI don't need a file at all.
+``SBFLOW_WEBHOOK_SECRET`` is deliberately the SAME env var name the brain reads
+(KAN-926/KAN-929) — it is one shared secret both processes must agree on, not a
+CLI-specific setting.
 """
 
 from __future__ import annotations
@@ -72,6 +75,9 @@ class CliConfig:
     git_token: str = ""
     llm_api_key: str = ""
     sample_warehouse_url: str = ""
+    # HMAC key for signing outgoing webhook POSTs (KAN-929). Same env var name
+    # the brain reads (SBFLOW_WEBHOOK_SECRET) — one shared secret, not two.
+    webhook_secret: str = ""
     # Where this config came from (diagnostics only; never persisted).
     source_path: Path | None = field(default=None, compare=False)
 
@@ -91,12 +97,15 @@ class CliConfig:
                 git_token=str(secrets.get("git_token", "")),
                 llm_api_key=str(secrets.get("llm_api_key", "")),
                 sample_warehouse_url=str(secrets.get("sample_warehouse_url", "")),
+                webhook_secret=str(secrets.get("webhook_secret", "")),
                 source_path=resolved,
             )
         # Env overrides (containers/CI need no file).
         cfg.repo = os.environ.get("SBFLOW_REPO", cfg.repo)
         cfg.webhook_url = os.environ.get("SBFLOW_WEBHOOK_URL", cfg.webhook_url)
         cfg.adapter = os.environ.get("SBFLOW_ADAPTER", cfg.adapter)
+        # Same env var name the brain reads (SBFLOW_WEBHOOK_SECRET) — shared secret.
+        cfg.webhook_secret = os.environ.get("SBFLOW_WEBHOOK_SECRET", cfg.webhook_secret)
         return cfg
 
     def to_toml(self) -> str:
@@ -137,6 +146,12 @@ class CliConfig:
             secret_lines.append(
                 f"sample_warehouse_url = {q(self.sample_warehouse_url)}"
             )
+        if self.webhook_secret:
+            secret_lines.append(
+                "# Signs outgoing webhook POSTs (KAN-929); must match the brain's "
+                "SBFLOW_WEBHOOK_SECRET."
+            )
+            secret_lines.append(f"webhook_secret = {q(self.webhook_secret)}")
         if secret_lines:
             lines.append("")
             lines.append("[secrets]")

@@ -29,7 +29,7 @@ def _capture(monkeypatch):
     """Stub the webhook POST; return a list that captures (url, payload)."""
     calls: list[tuple[str, dict]] = []
 
-    def fake_post(url, payload, timeout=5.0):
+    def fake_post(url, payload, timeout=5.0, secret=None):
         calls.append((url, payload))
 
     monkeypatch.setattr(run_mod, "post_failure", fake_post)
@@ -118,7 +118,7 @@ def test_dbt_run_results_enriches_payload(monkeypatch, tmp_path: Path):
 
 
 def test_webhook_failure_does_not_mask_command_rc(monkeypatch):
-    def boom(url, payload, timeout=5.0):
+    def boom(url, payload, timeout=5.0, secret=None):
         raise OSError("connection refused")
 
     monkeypatch.setattr(run_mod, "post_failure", boom)

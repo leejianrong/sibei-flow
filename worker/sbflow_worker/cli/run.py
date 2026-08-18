@@ -132,7 +132,7 @@ def cmd_run(command: list[str], cfg: CliConfig, args: Any) -> int:
         run_results_ref=run_results_ref,
     )
     try:
-        post_failure(cfg.webhook_url, payload)
+        post_failure(cfg.webhook_url, payload, secret=cfg.webhook_secret)
         print(
             f"[sbflow] command failed (rc={rc}); reported failure of "
             f"'{node_uid}' to {cfg.webhook_url}",
