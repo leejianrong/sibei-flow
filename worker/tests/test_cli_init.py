@@ -58,6 +58,47 @@ def test_init_writes_expected_config(tmp_path: Path):
     assert data["secrets"]["sample_warehouse_url"] == "postgres://ro@wh:5432/dev"
 
 
+def test_init_writes_webhook_secret_and_reports_it_set(tmp_path: Path):
+    """KAN-929: the onboarding flow asks for + persists the webhook secret,
+    and reports it as set/not-set in the summary without ever echoing it."""
+    cfg_path = tmp_path / "config.toml"
+    prompt, _ = _queue_prompter(
+        [
+            "acme/analytics",  # repo
+            "http://brain:8080/webhook",  # webhook url
+            "postgres",  # adapter
+            "",  # git token
+            "",  # llm api key
+            "",  # sample warehouse dsn
+            "sh-shared-secret",  # webhook signing secret
+        ]
+    )
+    out, out_lines = _out_collector()
+    rc = cmd_init(config_path=str(cfg_path), prompt=prompt, out=out)
+    assert rc == 0
+
+    data = tomllib.loads(cfg_path.read_text())
+    assert data["secrets"]["webhook_secret"] == "sh-shared-secret"
+
+    summary = "\n".join(out_lines)
+    assert "webhook secret = set" in summary
+    assert "sh-shared-secret" not in summary  # never echo the value itself
+
+
+def test_init_blank_webhook_secret_omits_it_and_reports_not_set(tmp_path: Path):
+    cfg_path = tmp_path / "config.toml"
+    prompt, _ = _queue_prompter(
+        ["acme/analytics", "http://brain:8080/webhook", "postgres", "", "", "", ""]
+    )
+    out, out_lines = _out_collector()
+    cmd_init(config_path=str(cfg_path), prompt=prompt, out=out)
+
+    data = tomllib.loads(cfg_path.read_text())
+    assert "secrets" not in data
+    summary = "\n".join(out_lines)
+    assert "webhook secret = not set" in summary
+
+
 def test_init_blank_llm_key_keeps_replay_provider(tmp_path: Path):
     cfg_path = tmp_path / "config.toml"
     # Blank git token, blank LLM key, blank sample DSN — the minimal path.
