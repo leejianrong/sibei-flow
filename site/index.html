@@ -418,7 +418,10 @@
         </div>
       </div>
 
-      <!-- the artifact: a pull request -->
+      <!-- the artifact: a pull request.
+           DEMO ASSET (KAN-221): the animated PR card below is the hero visual. To
+           swap in a recorded run instead, drop hero-demo.gif alongside this file
+           (or in docs/assets/) and replace this .pr block with an <img>/<video>. -->
       <div class="pr" role="img" aria-label="A pull request opened by sibei-flow: fix the orders model after an upstream customer_id to cust_id rename. Diff replaces customer_id with cust_id. Evidence: compiled, ran on a 10,000-row sample, output schema unchanged. Confidence high, risk low.">
         <div class="pr-top">
           <span class="pr-dot g"></span><span class="pr-dot"></span><span class="pr-dot"></span>
@@ -627,7 +630,7 @@
       </div>
 
       <div class="status" aria-label="Build status, shown honestly">
-        <div class="sh"><span>Building in the open</span><span>the wedge, sliced</span></div>
+        <div class="sh"><span>Built in the open</span><span>full v1 scope, shipped</span></div>
         <ul>
           <li>
             <div class="txt"><span class="name">Detect</span><span class="desc">webhook → classified repair job</span></div>
@@ -639,11 +642,15 @@
           </li>
           <li>
             <div class="txt"><span class="name">Verify</span><span class="desc">ephemeral sandbox: compile · sample · schema</span></div>
-            <span class="badge wip">in progress</span>
+            <span class="badge done">shipped</span>
           </li>
           <li>
             <div class="txt"><span class="name">Propose</span><span class="desc">open the PR with evidence + confidence</span></div>
-            <span class="badge next">next</span>
+            <span class="badge done">shipped</span>
+          </li>
+          <li>
+            <div class="txt"><span class="name">Harden</span><span class="desc">dedupe, crash recovery, one-line onboarding</span></div>
+            <span class="badge done">shipped</span>
           </li>
         </ul>
       </div>
