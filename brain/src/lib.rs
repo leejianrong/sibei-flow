@@ -15,10 +15,27 @@ pub mod web;
 pub mod webhook;
 
 use axum::{
+    extract::FromRef,
     routing::{get, post},
     Router,
 };
 use sqlx::PgPool;
+
+/// Shared axum state: the DB pool plus the optional webhook HMAC secret
+/// (KAN-926). `PgPool: FromRef<AppState>` lets the existing `State<PgPool>`
+/// handlers (`web::index`, `api::*`) keep working unchanged against this
+/// wider state via axum's substate pattern.
+#[derive(Clone)]
+pub struct AppState {
+    pub pool: PgPool,
+    pub webhook_secret: Option<String>,
+}
+
+impl FromRef<AppState> for PgPool {
+    fn from_ref(state: &AppState) -> Self {
+        state.pool.clone()
+    }
+}
 
 /// Run embedded migrations against the pool. Called at startup; the schema is
 /// the source of truth for the queue.
@@ -68,13 +85,23 @@ pub async fn reconcile_orphaned_jobs(pool: &PgPool) -> Result<u64, sqlx::Error> 
 /// `/webhook` (ingest) is the only POST; `/api/*` are GET-only, so any write
 /// verb against a run returns 405.
 pub fn app(pool: PgPool) -> Router {
+    app_with_webhook_secret(pool, None)
+}
+
+/// Build the router with an explicit webhook HMAC secret (KAN-926). `None`
+/// keeps `POST /webhook` unauthenticated, exactly `app`'s behavior.
+pub fn app_with_webhook_secret(pool: PgPool, webhook_secret: Option<String>) -> Router {
+    let state = AppState {
+        pool,
+        webhook_secret,
+    };
     Router::new()
         .route("/", get(web::index))
         .route("/healthz", get(healthz))
         .route("/webhook", post(webhook::receive))
         .route("/api/runs", get(api::list_runs))
         .route("/api/runs/{id}", get(api::get_run))
-        .with_state(pool)
+        .with_state(state)
 }
 
 async fn healthz() -> &'static str {

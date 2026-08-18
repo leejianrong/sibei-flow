@@ -39,6 +39,18 @@ async fn main() -> anyhow::Result<()> {
     // otherwise the brain stays read-only-plus-enqueue as in V1–V3.
     match brain::pr::PrOpenerConfig::from_env() {
         Some(pr_cfg) => {
+            // KAN-926: nudge the operator once at startup if the PR opener can
+            // open real PRs (GIT_HOST=github) while the webhook itself is
+            // still unauthenticated — that combination is exactly the audit
+            // finding (KAN-223): an unauthenticated caller can direct the
+            // PR-scoped token at an attacker-chosen repo/branch/diff.
+            if pr_cfg.git_host == "github" && cfg.webhook_secret.is_none() {
+                tracing::warn!(
+                    "GIT_HOST=github is configured but SBFLOW_WEBHOOK_SECRET is unset — \
+                     POST /webhook is unauthenticated; set SBFLOW_WEBHOOK_SECRET to require \
+                     HMAC-signed requests (KAN-926)"
+                );
+            }
             if let Err(e) = brain::pr::spawn(pool.clone(), pr_cfg) {
                 tracing::error!(error = %e, "PR opener failed to start; continuing without it");
             }
@@ -51,9 +63,12 @@ async fn main() -> anyhow::Result<()> {
         .with_context(|| format!("binding {}", cfg.bind_addr))?;
     tracing::info!(addr = %cfg.bind_addr, "brain listening");
 
-    axum::serve(listener, brain::app(pool))
-        .await
-        .context("serving")?;
+    axum::serve(
+        listener,
+        brain::app_with_webhook_secret(pool, cfg.webhook_secret),
+    )
+    .await
+    .context("serving")?;
     Ok(())
 }
 

@@ -329,7 +329,10 @@ git clone -b <sbflow/fix-…> git://localhost:9418/analytics.git /tmp/fix && \
 ```
 
 **`github` — open a real PR** with a **PR-scoped** token (never a prod-write
-credential):
+credential). `GIT_REPO` is **mandatory** here (KAN-926 / KAN-223) — the brain
+fails fast at startup if it's unset rather than falling back to the webhook
+payload's own `repo` field, which would let an unauthenticated caller redirect
+the PR-scoped token at an arbitrary repo:
 
 ```bash
 GIT_HOST=github \
@@ -343,6 +346,36 @@ The brain then POSTs `POST /repos/{owner}/{repo}/pulls`; the returned PR URL is
 recorded on the job and shown as a link on the run detail page. sibei-flow holds
 **no** warehouse or prod-write credential in either mode — the only capability
 it adds is "push a branch + open a PR" (ADR-0005 / ADR-0011 / R6.1).
+
+### Webhook authentication (KAN-926)
+
+`POST /webhook` supports HMAC-SHA256 request signing, the same shared-secret
+pattern dbt Cloud and GitHub use for their own outbound webhooks. It's **opt-in**
+via `SBFLOW_WEBHOOK_SECRET` — unset (the default), the endpoint behaves exactly
+as before this feature landed, so `make demo` and the default offline compose
+flow need no extra setup. Set it (and configure your Airflow/dbt enrollment or
+webhook sender to sign with the same secret) whenever the endpoint is reachable
+by anyone other than a trusted network — and especially whenever `GIT_HOST=github`
+is enabled, since an unauthenticated `/webhook` could otherwise be used to steer
+a real PR at a repo/branch/diff of the caller's choosing. The brain logs a
+startup warning if `GIT_HOST=github` is set while `SBFLOW_WEBHOOK_SECRET` is not.
+
+```bash
+SBFLOW_WEBHOOK_SECRET=some-shared-secret docker compose up -d brain
+```
+
+When set, every request must carry:
+
+- `X-Sbflow-Signature: sha256=<hex hmac>` — HMAC-SHA256, keyed by the secret,
+  over `"{timestamp}.{raw_body}"` (the raw request bytes, not a re-serialized
+  copy), hex-encoded.
+- `X-Sbflow-Timestamp: <unix seconds>` — the request is rejected if this is
+  more than 300 seconds from the brain's clock, in either direction.
+
+A missing header, a bad signature, or a stale timestamp is rejected with
+`401 Unauthorized`. This does not change the `WebhookAck` response shape or the
+`Failure` normalization/classification behind it — it's purely a transport-layer
+gate in front of the existing handler.
 
 ## Tests
 

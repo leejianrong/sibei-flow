@@ -13,22 +13,25 @@ use super::githost::{GitHost, PrRef, PrRequest};
 
 pub struct GithubHost {
     token: String,
-    /// `owner/name`; falls back to the failure payload's repo when unset.
-    repo_override: Option<String>,
+    /// `owner/name` — mandatory (KAN-926 / KAN-223): the payload's own `repo`
+    /// field never influences which repo a PR is opened against, since an
+    /// unauthenticated caller could otherwise redirect the PR-scoped token at
+    /// an arbitrary repo.
+    repo: String,
     api_base: String,
 }
 
 impl GithubHost {
-    pub fn new(token: String, repo_override: Option<String>, api_base: String) -> Self {
+    pub fn new(token: String, repo: String, api_base: String) -> Self {
         Self {
             token,
-            repo_override,
+            repo,
             api_base: api_base.trim_end_matches('/').to_string(),
         }
     }
 
-    fn repo_slug<'a>(&'a self, req: &'a PrRequest) -> &'a str {
-        self.repo_override.as_deref().unwrap_or(&req.repo)
+    fn repo_slug(&self) -> &str {
+        &self.repo
     }
 
     /// The HTTPS clone/push URL carrying the token as a Basic-auth username
@@ -73,7 +76,7 @@ impl GitHost for GithubHost {
     }
 
     fn open_pr(&self, req: &PrRequest) -> Result<PrRef> {
-        let repo = self.repo_slug(req).to_string();
+        let repo = self.repo_slug().to_string();
         let ws = GitWorkspace::clone(&self.authed_clone_url(&repo), &req.base_branch)?;
         ws.create_branch(&req.head_branch)?;
         ws.apply_diff(&req.diff)?;
