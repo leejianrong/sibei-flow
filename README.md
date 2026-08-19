@@ -5,12 +5,11 @@ drift or a SQL error, sibei-flow diagnoses it, verifies a fix in an ephemeral
 sandbox, and opens a reviewable **pull request** — so the fix is waiting for you
 instead of a 3am page.
 
-<!-- Demo GIF placeholder (KAN-221): drop the recording at docs/assets/hero-demo.gif
-     and uncomment the line below. Until then, `make demo` reproduces it locally. -->
-<!-- ![sibei-flow: a schema-drift failure healed into a verified pull request](docs/assets/hero-demo.gif) -->
+![sibei-flow: a schema-drift failure healed into a verified pull request](docs/assets/hero-demo.gif)
 
-> 📹 **Demo GIF coming.** In the meantime, `make up && make demo` runs the whole
-> webhook → verified fix → PR flow on your machine in a couple of minutes.
+*A real recorded run (KAN-221): `curl … /webhook` with a `customer_id` schema-drift
+failure → the dashboard shows the drafted diff, verification evidence, and a
+confidence/risk label. `make up && make demo` reproduces this on your machine.*
 
 ## What it is (30 seconds)
 
