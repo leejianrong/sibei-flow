@@ -98,7 +98,7 @@ services:
       MAX_TURNS: "6"
       # V3 tiered verification sandbox (ADR-0006, B-S2).
       SANDBOX_IMAGE: sbflow-sandbox:latest
-      SANDBOX_NETWORK: sibei-flow_default        # reach the warehouse from the sandbox
+      SANDBOX_NETWORK: ${COMPOSE_PROJECT_NAME}_default        # reach the warehouse from the sandbox
       SANDBOX_WORK_DIR: /tmp/sbflow-sandbox       # bind-mounted at the same host path
       SANDBOX_TIMEOUT: "120"
       # Tier-2: writable read-only DEV/SAMPLE connection (never prod). Comment
