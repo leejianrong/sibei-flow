@@ -45,6 +45,11 @@ class Config:
     max_turns: int
     #: Diff guard: reject an edit whose file diff exceeds this many lines (B-S5).
     diff_max_lines: int
+    #: KAN-648 / ADR-0012 decision 4, slice 1: drive the SAME single-candidate loop
+    #: through a `@satay.workflow` (`agent/satay_loop.py`) instead of the plain sync
+    #: loop (`agent/loop.py`). Default OFF — when off, `agent/satay_loop.py` is not
+    #: even imported and behaviour is byte-for-byte the pre-existing one.
+    satay_loop_enabled: bool
 
     # --- V3: tiered verification sandbox (ADR-0006, B-S2) ------------------
     #: Pre-baked sandbox image (python + dbt-core + dbt-postgres + git).
@@ -83,6 +88,8 @@ class Config:
             replay_session=os.environ.get("REPLAY_SESSION", _DEFAULT_REPLAY),
             max_turns=int(os.environ.get("MAX_TURNS", "6")),
             diff_max_lines=int(os.environ.get("DIFF_MAX_LINES", "40")),
+            satay_loop_enabled=os.environ.get("SBFLOW_SATAY_LOOP", "0")
+            not in ("0", "", "false"),
             sandbox_image=os.environ.get("SANDBOX_IMAGE", "sbflow-sandbox:latest"),
             sandbox_network=os.environ.get("SANDBOX_NETWORK") or None,
             sandbox_work_dir=os.environ.get("SANDBOX_WORK_DIR", "/tmp/sbflow-sandbox"),
