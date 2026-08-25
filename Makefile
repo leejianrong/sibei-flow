@@ -15,7 +15,14 @@
 COMPOSE ?= docker compose
 
 # --- conventions (see README "Project conventions") -----------------------
-NET   := sibei-flow_default
+# Mirror docker-compose's own project naming: respect an explicitly-set
+# COMPOSE_PROJECT_NAME, else fall back to the basename of the directory
+# containing the compose file (compose's own default), same fix as
+# docker-compose.yml's SANDBOX_NETWORK (KAN-1016, ada06cf). A hardcoded
+# `sibei-flow_default` only exists when the compose project is literally
+# named "sibei-flow" — it breaks under worktree isolation or a CI matrix,
+# where the project name differs.
+NET   := $(if $(COMPOSE_PROJECT_NAME),$(COMPOSE_PROJECT_NAME),$(notdir $(CURDIR)))_default
 DB_URL := postgres://sibei:sibei@postgres:5432/sibei
 WH_URL := postgres://sbflow_ro:sbflow_ro@warehouse:5432/warehouse
 
