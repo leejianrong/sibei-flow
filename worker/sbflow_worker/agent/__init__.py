@@ -68,15 +68,30 @@ def build_processor(cfg: Config) -> Callable[[dict[str, Any]], dict[str, Any]]:
             "error_text": payload.get("error_text"),
             "failing_file": failing_file,
         }
-        provider = get_provider(cfg)  # fresh per job (replay is stateful)
         if cfg.satay_loop_enabled:
-            # KAN-648 / ADR-0012 decision 4, slice 1: opt-in Satay-workflow-shaped
-            # path. Imported lazily so the default (flag off) path never even
-            # touches `satay`. See `agent/satay_loop.py` for what this does and
-            # does not change.
+            # KAN-648 / ADR-0012 decision 4: opt-in Satay-workflow-shaped path(s).
+            # Imported lazily so the default (flag off) path never even touches
+            # `satay`. See `agent/satay_loop.py` for what this does and does not
+            # change.
+            if cfg.satay_candidates > 1:
+                # Slice 2: N-candidate collect-mode fan-out. `provider_factory`
+                # (not a single shared `provider`) because each concurrently-run
+                # candidate needs its own instance — see
+                # `run_repair_satay_candidates`'s docstring for why.
+                from .satay_loop import run_repair_satay_candidates
+
+                return run_repair_satay_candidates(
+                    lambda: get_provider(cfg),
+                    ctx,
+                    task,
+                    max_turns=cfg.max_turns,
+                    n_candidates=cfg.satay_candidates,
+                )
             from .satay_loop import run_repair_satay
 
+            provider = get_provider(cfg)  # fresh per job (replay is stateful)
             return run_repair_satay(provider, ctx, task, max_turns=cfg.max_turns)
+        provider = get_provider(cfg)  # fresh per job (replay is stateful)
         return run_repair(provider, ctx, task, max_turns=cfg.max_turns)
 
     return process
