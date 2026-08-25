@@ -69,6 +69,14 @@ def build_processor(cfg: Config) -> Callable[[dict[str, Any]], dict[str, Any]]:
             "failing_file": failing_file,
         }
         provider = get_provider(cfg)  # fresh per job (replay is stateful)
+        if cfg.satay_loop_enabled:
+            # KAN-648 / ADR-0012 decision 4, slice 1: opt-in Satay-workflow-shaped
+            # path. Imported lazily so the default (flag off) path never even
+            # touches `satay`. See `agent/satay_loop.py` for what this does and
+            # does not change.
+            from .satay_loop import run_repair_satay
+
+            return run_repair_satay(provider, ctx, task, max_turns=cfg.max_turns)
         return run_repair(provider, ctx, task, max_turns=cfg.max_turns)
 
     return process

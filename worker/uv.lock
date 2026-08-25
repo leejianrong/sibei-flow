@@ -452,6 +452,15 @@ wheels = [
 ]
 
 [[package]]
+name = "satay"
+version = "0.1.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/15/e1/966cd2f4bce34a42fb63ea1d3b6e6ef9b916fd5bb3a18a06b89a168d5de0/satay-0.1.0.tar.gz", hash = "sha256:10b3d94e68cc26e885973f23a6f9104cd68a4105826d9f89bd94032451b7ebfe", size = 154097, upload-time = "2026-08-18T01:41:41.251Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/3d/77/8d6bb9944160d509e6ddd6b693ab7f7c7c30fe867726a7b1c1e6a18ece2b/satay-0.1.0-py3-none-any.whl", hash = "sha256:521371a17aa6b86eeba435214d9b70836c730a966b310838bffbfccab09b4d30", size = 182775, upload-time = "2026-08-18T01:41:40.145Z" },
+]
+
+[[package]]
 name = "sbflow-worker"
 version = "0.1.0"
 source = { editable = "." }
@@ -459,6 +468,7 @@ dependencies = [
     { name = "anthropic" },
     { name = "openai" },
     { name = "psycopg", extra = ["binary"] },
+    { name = "satay" },
 ]
 
 [package.optional-dependencies]
@@ -472,6 +482,7 @@ requires-dist = [
     { name = "openai", specifier = ">=3.0.0" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.3.4" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
+    { name = "satay", specifier = "==0.1.0" },
 ]
 provides-extras = ["dev"]
 
