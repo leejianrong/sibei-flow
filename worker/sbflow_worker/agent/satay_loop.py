@@ -98,9 +98,39 @@ job's read-only/stateless resources — confirmed safe to share by reading their
 implementations: `LocalSourceProvider.read` is a pure `Path.read_text()` with no shared
 mutable state; `WarehouseSchema.describe`/`column_names` open a **new** `psycopg.connect`
 per call (no shared connection); `DiffGuard` holds only an int config field, no mutable
-state; `SandboxRunner.verify` materializes each run under a fresh `uuid.uuid4()` work
-directory, so concurrent `docker run`s never collide on disk — while giving each
-candidate its own `working`/`last_run`/`last_verified_diff`.
+state — while giving each candidate its own `working`/`last_run`/`last_verified_diff`.
+
+**Correction (found by CI, not by reading the code — see PR #56's review thread):**
+an earlier draft of this docstring claimed `SandboxRunner` was safe to *share* across
+concurrent candidates too, on the reasoning that "`verify` materializes each run under
+a fresh `uuid.uuid4()` work directory, so concurrent `docker run`s never collide on
+disk." That is true, and also **not the whole story**: the *local* `/tmp` work
+directory is per-call-unique, but the *warehouse-side* tier-2 materialization target
+was not — every `SandboxRunner` used the same hardcoded `sample_schema="sbflow_sample"`
+(and every `dbt build` in it targets the same model name, e.g. `orders`), regardless of
+which job or candidate was verifying. Under N=1 this was never reachable (the claim
+loop drives one job at a time, and one job only ever ran one verification at once), so
+it looked safe by inspection. Under real N>1 concurrency it is not: two concurrent
+`dbt build --select orders` runs against the same `sbflow_sample.orders` view race on
+dbt's create-or-replace backup-swap and one fails with
+`relation "orders__dbt_backup" already exists` — reproduced directly (not merely
+suspected) by running `run_repair_satay_candidates` against the real fixture warehouse
+in a loop; roughly 3 of 8 iterations hit it. The fix: `SandboxRunner` gained a
+`sample_schema` field (default `"sbflow_sample"`, unchanged for every existing
+single-candidate caller) and `_clone_ctx_for_candidate` now clones the `SandboxRunner`
+too, giving each candidate a schema suffixed with its own `candidate_key`
+(`sbflow_sample_c0`, `sbflow_sample_c1`, ...) so concurrent tier-2 builds never target
+the same relation. `sbflow_dev` already holds `CREATE ON DATABASE` (`db/warehouse/
+init.sql`), so dbt auto-creates each schema on first use — no warehouse-fixture change
+needed. `verify_schema` (tier-1's compile-only target) got the same per-candidate
+treatment for symmetry, though `dbt compile` does not materialize anything so it was
+never actually reachable by this race. **The general lesson, not just this one field:**
+"per-call-unique local directory" and "per-call-unique remote state" are two different
+claims, and sharing a resource across concurrent callers requires checking both — this
+is exactly the kind of hole `_clone_ctx_for_candidate`'s per-candidate cloning exists
+to close, and this one slipped through the first pass because the checked half (disk)
+was real and the unchecked half (the warehouse) wasn't obviously a shared resource from
+reading `SandboxRunner.verify`'s signature alone.
 
 **`asyncio.to_thread` on the three durable-call bodies.** Slice 1 flagged
 `provider.complete` (in `_complete`) as fine for one candidate but unsafe the moment
@@ -603,20 +633,41 @@ def _judge(candidate_keys: list[str], outcomes: list[Any]) -> dict[str, Any]:
     }
 
 
-def _clone_ctx_for_candidate(base: AgentContext) -> AgentContext:
+def _clone_ctx_for_candidate(base: AgentContext, candidate_key: str) -> AgentContext:
     """A fresh `AgentContext` for one candidate, sharing the job's shared/read-only
     resources with `base` but never its mutable per-run state.
 
-    Safe to share (confirmed by reading each implementation, per the module
+    Safe to share as-is (confirmed by reading each implementation, per the module
     docstring): `source` (stateless file reads), `warehouse` (opens a fresh
-    connection per call), `guard` (pure config, no mutable state), `sandbox` (keys
-    every `verify()` under a fresh `uuid.uuid4()` work directory). NOT shared:
+    connection per call), `guard` (pure config, no mutable state). NOT shared, ever:
     `working` (the in-memory draft every `edit_file` mutates) and the
     `last_run`/`last_verified_diff` single-slot cache — each candidate gets its own,
     or two candidates editing concurrently would stomp each other's drafts.
+
+    `sandbox` is NOT shared either, despite being read-only from this module's point
+    of view — it is cloned with a `candidate_key`-suffixed `sample_schema` (and
+    `verify_schema`, for symmetry). This is the fix for a real bug CI caught (see the
+    module docstring's "Correction" note): the local `/tmp` work directory
+    `SandboxRunner.verify` materializes into IS unique per call, but the *warehouse*
+    schema/relation tier-2 (`dbt build`) writes into was a single hardcoded name
+    (`sbflow_sample.<model>`) shared by every caller — safe under N=1 (only one
+    verification ever ran at a time), but a real, reproduced race under N>1: two
+    concurrent `dbt build`s against the same relation collide on dbt's
+    create-or-replace backup-swap.
     """
+    sandbox = base.sandbox
+    if sandbox is not None:
+        sandbox = dataclasses.replace(
+            sandbox,
+            verify_schema=f"{sandbox.verify_schema}_{candidate_key}",
+            sample_schema=f"{sandbox.sample_schema}_{candidate_key}",
+        )
     return dataclasses.replace(
-        base, working=WorkingCopy(), last_run=None, last_verified_diff=""
+        base,
+        working=WorkingCopy(),
+        last_run=None,
+        last_verified_diff="",
+        sandbox=sandbox,
     )
 
 
@@ -674,8 +725,10 @@ def run_repair_satay_candidates(
     "produces equal output" (see `tests/test_satay_loop_candidates.py`).
 
     For N>1: builds N independent `_Rig`s — a fresh `provider_factory()` call and a
-    fresh `_clone_ctx_for_candidate(ctx)` per candidate (see both docstrings for why
-    neither can be shared across concurrently-running candidates) — publishes them
+    fresh `_clone_ctx_for_candidate(ctx, key)` per candidate (see both docstrings for
+    why neither the provider nor the context — including its `SandboxRunner`'s
+    warehouse-side verification target — can be shared across concurrently-running
+    candidates) — publishes them
     once, up front, on `_RIGS`, then drives `_multi_candidate_workflow` through a
     private, throwaway, in-memory journal exactly as `run_repair_satay` does for N=1
     (nothing here is persisted, resumed, or shared across jobs; V5's job-level lease
@@ -693,7 +746,7 @@ def run_repair_satay_candidates(
     tools = tools or TOOL_SPECS
     candidate_keys = [f"c{i}" for i in range(n_candidates)]
     rigs = {
-        key: _Rig(provider=provider_factory(), ctx=_clone_ctx_for_candidate(ctx))
+        key: _Rig(provider=provider_factory(), ctx=_clone_ctx_for_candidate(ctx, key))
         for key in candidate_keys
     }
     rigs_token = _RIGS.set(rigs)
