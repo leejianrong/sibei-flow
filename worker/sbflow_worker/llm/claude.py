@@ -50,6 +50,24 @@ class ClaudeProvider(LlmProvider):
             for b in resp.content
             if b.type == "tool_use"
         ]
+        # KAN-651: the Anthropic SDK's `Message.usage` is a required field on a
+        # real response — `getattr` here is defensive only (a hand-built mock in
+        # a test), never a documented "sometimes absent" case. No `usd` figure is
+        # computed here (see `AssistantTurn.usage`'s docstring) — only what the
+        # SDK itself reports.
+        sdk_usage = getattr(resp, "usage", None)
+        usage = (
+            {
+                "model": resp.model or self.model,
+                "input_tokens": sdk_usage.input_tokens,
+                "output_tokens": sdk_usage.output_tokens,
+            }
+            if sdk_usage is not None
+            else None
+        )
         return AssistantTurn(
-            text=text, tool_calls=tool_calls, stop_reason=resp.stop_reason or "end_turn"
+            text=text,
+            tool_calls=tool_calls,
+            stop_reason=resp.stop_reason or "end_turn",
+            usage=usage,
         )

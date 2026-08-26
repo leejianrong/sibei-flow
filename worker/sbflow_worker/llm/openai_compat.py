@@ -69,10 +69,26 @@ class OpenAICompatProvider(LlmProvider):
             for tc in (msg.tool_calls or [])
             if tc.type == "function"
         ]
+        # KAN-651: unlike Anthropic's, the OpenAI-compatible `usage` field is
+        # genuinely optional in practice — some local/self-hosted servers
+        # (LM Studio, older Ollama shims) omit it entirely, so `None` here is a
+        # real "not available" case, not just defensive coding. No `usd` figure
+        # is computed here (see `AssistantTurn.usage`'s docstring) — only what
+        # the server itself reports.
+        usage = (
+            {
+                "model": resp.model or self.model,
+                "input_tokens": resp.usage.prompt_tokens,
+                "output_tokens": resp.usage.completion_tokens,
+            }
+            if resp.usage is not None
+            else None
+        )
         return AssistantTurn(
             text=msg.content or "",
             tool_calls=tool_calls,
             stop_reason="tool_use" if tool_calls else "end_turn",
+            usage=usage,
         )
 
 

@@ -157,6 +157,23 @@
       }
       return html;
     }
+    // KAN-651: `usage` is `{available, input_tokens, output_tokens, total_tokens,
+    // models, entry_count}`, computed server-side (`api::get_run`) by summing
+    // `ctx.record_model_usage` entries out of the worker's persisted Satay
+    // journal — never a client-side estimate. `available: false` means no run
+    // this job's transcript points at ever reported usage (the keyless `replay`
+    // provider, always; possibly a live provider whose response carried none) —
+    // rendered as an honest disclosure, never a fabricated $0/0-token cost.
+    function renderCost(usage) {
+      if (!usage.available) {
+        return `<div class="detail">token usage not available for this provider</div>`;
+      }
+      const models = (usage.models && usage.models.length)
+        ? ` <span class="detail">— ${usage.models.map(esc).join(", ")}</span>`
+        : "";
+      return `<div>~${usage.total_tokens.toLocaleString()} tokens `
+        + `(${usage.input_tokens.toLocaleString()} in / ${usage.output_tokens.toLocaleString()} out)${models}</div>`;
+    }
     function renderDiff(diff) {
       return esc(diff).split("\n").map(l => {
         if (l.startsWith("+++") || l.startsWith("---") || l.startsWith("@@")) return `<span class="hd">${l}</span>`;
@@ -243,6 +260,15 @@
       }
       if (res.confidence != null || res.risk_class) {
         sections += `<div class="card"><h3>Confidence &amp; risk</h3>${renderConfidence(res)}</div>`;
+      }
+      // KAN-651: per-run cost, read server-side from the worker's persisted
+      // Satay journal (`usage` is a computed field the run-detail API merges
+      // in — it is not part of RepairResult itself). A distinct, narrow card
+      // — never folded into confidence/evidence — present only when the job's
+      // transcript is the `journal` arm, honestly showing "not available"
+      // rather than a fabricated number when no provider ever reported usage.
+      if (d.usage) {
+        sections += `<div class="card"><h3>Cost</h3>${renderCost(d.usage)}</div>`;
       }
       if (res.diff) {
         sections += `<div class="card"><h3>Drafted diff (minimal)</h3><pre class="diff">${renderDiff(res.diff)}</pre></div>`;

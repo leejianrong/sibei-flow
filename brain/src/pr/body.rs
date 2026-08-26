@@ -58,6 +58,11 @@ pub async fn render_body(job: &JobRow, journal_dir: &str) -> String {
         get("factors"),
     ));
 
+    // KAN-651: a small, honest cost line — its own narrow section, deliberately
+    // NOT interleaved into the evidence table above (which KAN-650, landing
+    // concurrently, also extends) or folded into the reasoning transcript below.
+    s.push_str(&render_cost(get("transcript"), journal_dir).await);
+
     s.push_str(&render_transcript(get("transcript"), journal_dir).await);
 
     s.push_str("---\n");
@@ -119,6 +124,45 @@ async fn render_transcript(t: Option<&Value>, journal_dir: &str) -> String {
         _ => return String::new(),
     };
     format!("<details>\n<summary>🧠 Reasoning transcript</summary>\n\n{body}\n</details>\n\n")
+}
+
+/// The per-run cost line (KAN-651, EPIC-84): a real read of the journal's
+/// `ctx.record_model_usage` slot (`journal::aggregate_usage`), never a fabricated
+/// dollar figure — see `AssistantTurn.usage`'s docstring (worker side) for why no
+/// cost-per-token table lives in this codebase. Renders nothing for the `lines`
+/// transcript arm (no journal to read at all) or when `transcript` itself is
+/// absent; renders an honest "not available" line when the journal exists but no
+/// run ever called `record_model_usage` (the keyless `replay` provider, always;
+/// possibly a live provider whose response carried no usage block).
+///
+/// For an N>1 (multi-candidate) run, `journal::cost_run_ids` resolves to EVERY
+/// candidate's own child run, not just the winner's — KAN-651's explicit decision
+/// that "what did this job cost" means the whole job's spend, since a losing
+/// candidate's model calls were real spend too (see `satay_loop.py`'s
+/// `_drive_multi_candidate` docstring for the full reasoning). For N=1 it falls
+/// back to the single `run_id`.
+async fn render_cost(t: Option<&Value>, journal_dir: &str) -> String {
+    let Some(t) = t else {
+        return String::new();
+    };
+    let Some((run_ids, journal_ref)) = super::journal::cost_run_ids(t) else {
+        return String::new();
+    };
+    let usage = super::journal::aggregate_usage(journal_dir, &run_ids, &journal_ref).await;
+    if usage.is_empty() {
+        return "**Cost:** token usage not available for this provider.\n\n".to_string();
+    }
+    let models = if usage.models.is_empty() {
+        String::new()
+    } else {
+        format!(" · {}", usage.models.join(", "))
+    };
+    format!(
+        "**Cost:** ~{total} tokens ({input} in / {output} out){models}\n\n",
+        total = usage.total_input_tokens + usage.total_output_tokens,
+        input = usage.total_input_tokens,
+        output = usage.total_output_tokens,
+    )
 }
 
 fn render_evidence(ev: Option<&Value>) -> String {
@@ -368,5 +412,81 @@ mod tests {
     async fn transcript_empty_lines_render_nothing() {
         let t = serde_json::json!({"kind": "lines", "lines": []});
         assert_eq!(render_transcript(Some(&t), NO_JOURNAL).await, "");
+    }
+
+    // --- KAN-651: the cost line -------------------------------------------------
+
+    #[tokio::test]
+    async fn cost_line_renders_real_token_counts_from_the_journal() {
+        let dir = tempfile::tempdir().unwrap();
+        super::super::journal::fixtures::write_usage_event(
+            dir.path(),
+            "r1",
+            1,
+            r#"[{"model":"claude-opus-4-8","input_tokens":123,"output_tokens":45}]"#,
+        )
+        .await;
+
+        let t = serde_json::json!({"kind": "journal", "run_id": "r1", "ref": "satay.db"});
+        let out = render_cost(Some(&t), dir.path().to_str().unwrap()).await;
+
+        assert!(out.contains("**Cost:**"));
+        assert!(out.contains("168 tokens"));
+        assert!(out.contains("123 in"));
+        assert!(out.contains("45 out"));
+        assert!(out.contains("claude-opus-4-8"));
+    }
+
+    #[tokio::test]
+    async fn cost_line_discloses_not_available_rather_than_a_fabricated_number() {
+        let dir = tempfile::tempdir().unwrap();
+        super::super::journal::fixtures::write_minimal_journal(dir.path(), "r1").await;
+
+        let t = serde_json::json!({"kind": "journal", "run_id": "r1", "ref": "satay.db"});
+        let out = render_cost(Some(&t), dir.path().to_str().unwrap()).await;
+
+        assert!(out.contains("not available"));
+        assert!(!out.contains('$'), "must never invent a dollar figure");
+    }
+
+    #[tokio::test]
+    async fn cost_line_sums_every_candidate_for_an_n_candidate_run() {
+        // KAN-651's N-candidate decision: total across ALL candidates, not just
+        // the winner. `cost_run_ids` names both c0 (the winner) and c1 (a loser);
+        // the rendered line must reflect both.
+        let dir = tempfile::tempdir().unwrap();
+        super::super::journal::fixtures::write_usage_event(
+            dir.path(),
+            "c0",
+            1,
+            r#"[{"model":"m0","input_tokens":100,"output_tokens":10}]"#,
+        )
+        .await;
+        super::super::journal::fixtures::write_usage_event(
+            dir.path(),
+            "c1",
+            1,
+            r#"[{"model":"m1","input_tokens":200,"output_tokens":20}]"#,
+        )
+        .await;
+
+        let t = serde_json::json!({
+            "kind": "journal",
+            "run_id": "c0",
+            "ref": "satay.db",
+            "cost_run_ids": ["c0", "c1"],
+        });
+        let out = render_cost(Some(&t), dir.path().to_str().unwrap()).await;
+
+        assert!(out.contains("330 tokens"));
+        assert!(out.contains("300 in"));
+        assert!(out.contains("30 out"));
+    }
+
+    #[tokio::test]
+    async fn cost_line_renders_nothing_for_the_lines_arm() {
+        let t = serde_json::json!({"kind": "lines", "lines": ["a"]});
+        assert_eq!(render_cost(Some(&t), NO_JOURNAL).await, "");
+        assert_eq!(render_cost(None, NO_JOURNAL).await, "");
     }
 }

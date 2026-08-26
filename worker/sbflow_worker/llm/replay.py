@@ -12,6 +12,14 @@ Session file shape::
         {"text": "...", "tool_calls": [{"name": "read_file", "input": {...}}]},
         {"text": "final explanation"}
     ]}
+
+A scripted turn may also carry a "usage" dict (KAN-651) — e.g.
+``{"model": "test-model", "input_tokens": 10, "output_tokens": 4}`` — which
+passes straight through to `AssistantTurn.usage`, purely so tests can exercise
+the usage-recording path deterministically without a live provider. No real
+recorded session needs this key; the deterministic demo/test scripts genuinely
+have no token cost, so a session without it (the common case) reports `None`,
+same as before.
 """
 
 from __future__ import annotations
@@ -47,4 +55,5 @@ class ReplayProvider(LlmProvider):
             text=turn.get("text", ""),
             tool_calls=calls,
             stop_reason="tool_use" if calls else "end_turn",
+            usage=turn.get("usage"),
         )
