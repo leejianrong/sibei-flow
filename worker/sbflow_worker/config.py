@@ -50,6 +50,13 @@ class Config:
     #: loop (`agent/loop.py`). Default OFF — when off, `agent/satay_loop.py` is not
     #: even imported and behaviour is byte-for-byte the pre-existing one.
     satay_loop_enabled: bool
+    #: KAN-648 / ADR-0012 decision 4, slice 2: number of candidate fixes to draft and
+    #: verify concurrently via collect-mode Satay fan-out (`run_repair_satay_candidates`
+    #: in `agent/satay_loop.py`), keeping the highest-confidence `pr_proposed` result.
+    #: Only consulted when `satay_loop_enabled` is also on. Default `1` == today's
+    #: single-candidate behaviour, byte-for-byte (the ADR's own example phrasing
+    #: suggests 3 as a sensible value once this is turned on).
+    satay_candidates: int
 
     # --- V3: tiered verification sandbox (ADR-0006, B-S2) ------------------
     #: Pre-baked sandbox image (python + dbt-core + dbt-postgres + git).
@@ -90,6 +97,7 @@ class Config:
             diff_max_lines=int(os.environ.get("DIFF_MAX_LINES", "40")),
             satay_loop_enabled=os.environ.get("SBFLOW_SATAY_LOOP", "0")
             not in ("0", "", "false"),
+            satay_candidates=int(os.environ.get("SBFLOW_SATAY_CANDIDATES", "1")),
             sandbox_image=os.environ.get("SANDBOX_IMAGE", "sbflow-sandbox:latest"),
             sandbox_network=os.environ.get("SANDBOX_NETWORK") or None,
             sandbox_work_dir=os.environ.get("SANDBOX_WORK_DIR", "/tmp/sbflow-sandbox"),

@@ -114,6 +114,24 @@ class SandboxRunner:
     sample_limit: int = 10000
     #: sandbox/ context inside the worker image, for lazy image build.
     build_context: str | None = "/opt/sandbox"
+    #: dbt target schema for the tier-1 (read-only) compile connection. `dbt
+    #: compile` never materializes anything, so this name is never actually
+    #: touched in the warehouse (KAN-648 slice 2 investigation) — kept
+    #: overridable anyway, for symmetry with `sample_schema` and as a defensive
+    #: measure against a future dbt/adapter version that *does* write during
+    #: compile.
+    verify_schema: str = "sbflow_verify"
+    #: dbt target schema tier-2 (`dbt build --sample`) materializes into. Must
+    #: be unique per **concurrently-running** verification: two `dbt build`s
+    #: against the same schema+model race on dbt's create-or-replace backup-swap
+    #: (`CREATE ... AS ...; ALTER TABLE x RENAME TO x__dbt_backup; ...`) and one
+    #: fails with `relation "<model>__dbt_backup" already exists` — reproduced
+    #: directly under KAN-648 slice 2's N-candidate fan-out (see
+    #: `agent/satay_loop.py::_clone_ctx_for_candidate`, which gives each
+    #: candidate's own `SandboxRunner` clone a distinct schema derived from its
+    #: `candidate_key`). Single-candidate callers never override this, so its
+    #: default keeps today's fixed name, unchanged.
+    sample_schema: str = "sbflow_sample"
     _image_ready: bool = field(default=False, repr=False)
 
     # -- image lifecycle ----------------------------------------------------
@@ -197,9 +215,9 @@ class SandboxRunner:
         to compile, so tier-1 uses the read-only warehouse connection."""
         outputs: dict[str, Any] = {}
         if self.warehouse_url:
-            outputs["compile"] = _pg_output(self.warehouse_url, "sbflow_verify")
+            outputs["compile"] = _pg_output(self.warehouse_url, self.verify_schema)
         if self.sample_url:
-            outputs["sample"] = _pg_output(self.sample_url, "sbflow_sample")
+            outputs["sample"] = _pg_output(self.sample_url, self.sample_schema)
         # Default target: prefer the RO compile target; fall back to sample.
         default = "compile" if "compile" in outputs else next(iter(outputs), "compile")
         lines = ["analytics:", f"  target: {default}", "  outputs:"]
