@@ -363,6 +363,28 @@ fn summarize(event_type: &str, payload: &Value, blobs_dir: Option<&Path>) -> Str
             .get("output_ref")
             .map(|v| format!("outcome={}", render_value(v, blobs_dir)))
             .unwrap_or_default(),
+        // KAN-650 — a fork-replay's own journal opens with this marker (the
+        // worker's `agent/satay_loop.py::reverify_with_fork` calls
+        // `satay.fork(...)`), recording the lineage this reader needs to make
+        // the fork's transcript legible on its own: which run it branched
+        // from, and where. Without this the transcript for a fork run would
+        // read as an ordinary run whose events mysteriously start mid-story —
+        // every event up to and including `fork_point_seq` is copied history
+        // from `source_run_id`, not work this run did itself.
+        "RunForked" => {
+            let mut parts = vec![
+                format!("source_run_id={}", str_field(payload, "source_run_id")),
+                format!("fork_point_seq={}", int_field(payload, "fork_point_seq")),
+            ];
+            if payload
+                .get("input_overridden")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            {
+                parts.push("input_overridden=true".to_string());
+            }
+            parts.join(" ")
+        }
         _ => String::new(),
     }
 }
@@ -944,5 +966,39 @@ mod tests {
     fn cost_run_ids_is_none_for_the_lines_arm() {
         let t = serde_json::json!({"kind": "lines", "lines": ["a"]});
         assert!(cost_run_ids(&t).is_none());
+    }
+
+    // --- KAN-650: fork lineage in the reasoning transcript -----------------------
+
+    #[tokio::test]
+    async fn render_shows_a_forks_lineage_kan_650() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("satay.db");
+        let pool = fixture_pool(&db_path).await;
+
+        let run_id = "fork-run";
+        insert_event(
+            &pool,
+            run_id,
+            1,
+            "WorkflowCreated",
+            r#"{"workflow_name":"_repair_workflow","input_ref":{"task":"x"},"code_version":"abc123"}"#,
+        )
+        .await;
+        insert_event(
+            &pool,
+            run_id,
+            2,
+            "RunForked",
+            r#"{"source_run_id":"source-run-1","fork_point_seq":7,"input_overridden":true}"#,
+        )
+        .await;
+        pool.close().await;
+
+        let out = render(dir.path().to_str().unwrap(), run_id, "satay.db").await;
+        assert!(out.contains("RunForked"));
+        assert!(out.contains("source_run_id=source-run-1"));
+        assert!(out.contains("fork_point_seq=7"));
+        assert!(out.contains("input_overridden=true"));
     }
 }

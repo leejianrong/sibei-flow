@@ -196,6 +196,30 @@ fn render_evidence(ev: Option<&Value>) -> String {
         }
     ));
 
+    // KAN-650 — tier-3 (fork-replay against a recorded `get_schema` snapshot,
+    // `worker/sbflow_worker/agent/satay_loop.py::reverify_with_fork`). Unlike
+    // tier-1/tier-2, tier-3 is opt-in and not run for every job (see that
+    // module's "invocation-scope decision"), so — deliberately unlike
+    // tier-1/tier-2's always-on rows above — this row only appears when a
+    // fork-replay actually ran (`tier3.ran == true`): showing "not run" on
+    // every single automated PR for a signal nothing has triggered yet would
+    // be noise, not disclosure. When it *did* run, the row is unconditional,
+    // same disclosure contract as the other two.
+    if let Some(t3) = ev.get("tier3") {
+        let t3_ran = t3.get("ran").and_then(Value::as_bool).unwrap_or(false);
+        if t3_ran {
+            let t3_pass = t3.get("passed").and_then(Value::as_bool);
+            s.push_str(&format!(
+                "| tier-3 fork-replay (recorded schema snapshot) | {} |\n",
+                match t3_pass {
+                    Some(true) => "✅ passed".to_string(),
+                    Some(false) => "❌ failed".to_string(),
+                    None => "⚠️ undetermined".to_string(),
+                }
+            ));
+        }
+    }
+
     let os = ev.get("output_schema");
     let os_changed = os.and_then(|o| o.get("changed")).and_then(Value::as_bool);
     let os_detail = os
@@ -340,6 +364,89 @@ mod tests {
         let b = render_body(&job, NO_JOURNAL).await;
         assert!(b.contains("⚠️ not configured"));
         assert!(b.contains("⚠️ undetermined"));
+    }
+
+    // --- KAN-650: tier-3 (fork-replay) evidence row ---------------------------
+
+    #[tokio::test]
+    async fn evidence_shows_a_passing_tier3_row_when_a_fork_replay_ran() {
+        let mut job = sample_job();
+        job.result = Some(serde_json::json!({
+            "outcome": "pr_proposed",
+            "evidence": {
+                "tier1": {"ran": true, "passed": true, "log": ""},
+                "tier2": {"ran": false, "passed": null, "log": ""},
+                "tier3": {
+                    "ran": true,
+                    "passed": true,
+                    "source_run_id": "abc123",
+                    "fork_run_id": "def456",
+                    "get_schema_ordinal": 1,
+                    "log": "forked abc123 at get_schema ordinal 1"
+                },
+                "output_schema": {"changed": false, "detail": "unchanged"}
+            }
+        }));
+        let b = render_body(&job, NO_JOURNAL).await;
+        assert!(b.contains("tier-3 fork-replay"));
+        assert!(b.contains("✅ passed"));
+    }
+
+    #[tokio::test]
+    async fn evidence_shows_a_failing_tier3_row_when_a_fork_replay_failed() {
+        let mut job = sample_job();
+        job.result = Some(serde_json::json!({
+            "outcome": "no_fix",
+            "evidence": {
+                "tier1": {"ran": true, "passed": true, "log": ""},
+                "tier2": {"ran": false, "passed": null, "log": ""},
+                "tier3": {
+                    "ran": true,
+                    "passed": false,
+                    "source_run_id": "abc123",
+                    "fork_run_id": "def456",
+                    "get_schema_ordinal": 1,
+                    "log": "forked abc123 at get_schema ordinal 1"
+                },
+                "output_schema": {"changed": false, "detail": "unchanged"}
+            }
+        }));
+        let b = render_body(&job, NO_JOURNAL).await;
+        assert!(b.contains("tier-3 fork-replay"));
+        assert!(b.contains("❌ failed"));
+    }
+
+    #[tokio::test]
+    async fn evidence_omits_the_tier3_row_when_no_fork_replay_ran() {
+        // `sample_job()`'s evidence has no `tier3` key at all (the shape every
+        // RepairResult had before KAN-650) — the row must not appear, and
+        // rendering must not panic on the missing key.
+        let b = render_body(&sample_job(), NO_JOURNAL).await;
+        assert!(!b.contains("tier-3"));
+
+        // The disclosed-but-not-run shape (`tier3.ran == false`, what
+        // `sandbox/evidence.py::tier3_not_run` builds by default now) must
+        // also stay silent — showing "not run" on every single PR for an
+        // opt-in signal nothing triggered would be noise, not disclosure.
+        let mut job = sample_job();
+        job.result = Some(serde_json::json!({
+            "outcome": "pr_proposed",
+            "evidence": {
+                "tier1": {"ran": true, "passed": true, "log": ""},
+                "tier2": {"ran": false, "passed": null, "log": ""},
+                "tier3": {
+                    "ran": false,
+                    "passed": null,
+                    "source_run_id": null,
+                    "fork_run_id": null,
+                    "get_schema_ordinal": null,
+                    "log": "fork-replay not attempted for this run"
+                },
+                "output_schema": {"changed": false, "detail": "unchanged"}
+            }
+        }));
+        let b = render_body(&job, NO_JOURNAL).await;
+        assert!(!b.contains("tier-3"));
     }
 
     // --- RepairResult.transcript, the ADR-0013 discriminated union -----------

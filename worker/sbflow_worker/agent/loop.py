@@ -249,6 +249,7 @@ def _verify_and_gate(
     signals = ScoreSignals(
         tier1_passed=bool(run.tier1.passed),
         tier2_passed=run.tier2.passed if run.tier2.ran else None,
+        tier3_passed=evidence["tier3"]["passed"],
         output_schema_unchanged=evidence["output_schema"]["changed"] is False
         if evidence["output_schema"]["changed"] is not None
         else None,

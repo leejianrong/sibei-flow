@@ -206,6 +206,57 @@ scenario `test_satay_loop.py`/`test_satay_loop_candidates.py` exercises resolves
 `None` on both paths. Because it is drift-detection over the failing model/task, not
 candidate-dependent, `_judge` below never needs to reconcile *different*
 `needs_prod_action` verdicts across candidates in practice — see `_judge`'s docstring.
+
+**KAN-650 — fork-replay tier-3 (ADR-0012's Consequences section).** The ADR
+names the destination directly: "fork the repair run at the failing call and
+replay a candidate fix against the recorded inputs... Tier-1 `dbt compile` is
+weighted 0.30 precisely because it is a weak signal; replay-against-real-inputs
+is a strong one." This module adds the primitive: `locate_get_schema_fork_point`
+finds the *last* `get_schema` `_dispatch` call before any `edit_file` call in a
+completed candidate's own journal (the schema state the fix was actually
+drafted against — see that function's docstring for the full policy, including
+the zero/all-errored degrade case), and `reverify_with_fork` forks the run
+`fork_point_seq`-inclusive of that call, substitutes a caller-supplied
+`override_diff` (full replacement content per changed path, not unified-diff
+*text* to parse — see `_apply_override_diff_and_verify`), and drives the fork
+to a fresh, independently-verified `RepairResult`. Because satay's replay
+engine never re-executes a journal *hit* (`replay/engine.py::durable_call`'s
+"hit" branch returns the recorded result without calling the task body), the
+`get_schema` call and everything before it replay from the copied prefix — no
+live warehouse round-trip — while the fork's own `_verify` call (the
+substituted diff's tier-1/tier-2 sandbox run) is genuinely new, real work.
+
+`_run_candidate` is the fork-aware body both `_repair_workflow` and
+`_candidate_workflow` share: an optional `override_diff` + matching
+`override_after_ordinal` in `payload` (set only by `reverify_with_fork`, never
+by the normal single-pass or multi-candidate entry points below) makes it stop
+drafting the instant it replays the located `get_schema` call and jump straight
+to `_apply_override_diff_and_verify` instead of continuing the turn loop — see
+that branch, inline in the tool-call loop, for why a *local* ordinal counter
+mirroring satay's own `(task_name, ordinal)` identity (`replay/identity.py`) is
+enough to find the exact right moment without any special-casing of tool names.
+
+**Invocation-scope decision (read before wiring this into anything else).**
+This card ships the fork-point-location function, the fork-driving function,
+and the evidence/score plumbing (`sandbox/evidence.py`'s `tier3` slot,
+`score.py`'s re-derived rubric) — a working, tested primitive — but does
+**not** call `reverify_with_fork` automatically from `build_processor`'s
+single-pass claim loop, or from every candidate's own verification in the N>1
+path. Two reasons: first, "every candidate forks and re-verifies itself" is
+close to redundant with the live verification it just did seconds earlier — the
+live warehouse has not had time to drift, so the strong-signal property the ADR
+describes ("does this fix work against the precise conditions recorded when
+the failure was diagnosed, rather than against whatever the warehouse looks
+like at verify time") barely applies yet. Second, the more interesting use
+this primitive unlocks — re-verifying a *different, later* diff (a
+human-edited variant, or a future incremental-fix flow) against an *earlier*
+candidate's recorded snapshot — has no caller in this codebase yet: no UI
+action, no CLI subcommand, no automatic trigger condition has been decided,
+and inventing one here would be a product decision past what this card or the
+brief asks for. `reverify_with_fork` is therefore a real, directly callable,
+test-proven Python entry point today (see `tests/test_satay_loop_fork_tier3.py`)
+— the primitive the ADR calls "the strongest long-term payoff" — waiting on a
+follow-on card to decide when it fires.
 """
 
 from __future__ import annotations
@@ -411,6 +462,15 @@ async def _run_candidate(payload: dict[str, Any]) -> dict[str, Any]:
     task: dict[str, Any] = payload["task"]
     max_turns: int = payload["max_turns"]
     tools: list[ToolSpec] = payload["tools"]
+    # KAN-650: an optional fork-replay override, set only by
+    # `reverify_with_fork` (never by `run_repair_satay`/
+    # `run_repair_satay_candidates`) — see the module docstring's "fork-replay
+    # tier-3" section. `override_after_ordinal` names the `_dispatch` call, by
+    # satay's own per-task-name ordinal (`replay/identity.py`), after which
+    # this function must stop drafting and verify `override_diff` instead.
+    # Always set together, or not at all.
+    override_diff: dict[str, str] | None = payload.get("override_diff")
+    override_after_ordinal: int | None = payload.get("override_after_ordinal")
 
     messages: list[dict[str, Any]] = [
         {
@@ -420,6 +480,17 @@ async def _run_candidate(payload: dict[str, Any]) -> dict[str, Any]:
     ]
     last_text = ""
     edit_attempts = 0
+    # Mirrors satay's own `IdentityResolver` counter for the `_dispatch` task
+    # name: "the Nth durable call of task T during a drive", 0-indexed,
+    # incremented once per call in call order (`replay/identity.py`). Both
+    # counters start at 0 and this function's only `_dispatch` call site is
+    # the single `await _dispatch(tc)` below, awaited strictly in order, so
+    # this local counter always equals the ordinal satay itself assigns —
+    # confirmed safe because the nondeterminism check only compares task
+    # *names* at each call position, never arguments (`replay/engine.py`'s
+    # `durable_call`), so nothing here needs to coordinate with satay beyond
+    # "count dispatch calls in the same order it does."
+    dispatch_ordinal = 0
 
     for _ in range(max_turns):
         turn = await _complete(SYSTEM_PROMPT, messages, tools)
@@ -443,6 +514,8 @@ async def _run_candidate(payload: dict[str, Any]) -> dict[str, Any]:
             if tc.name == "edit_file":
                 edit_attempts += 1
             outcome = await _dispatch(tc)
+            this_ordinal = dispatch_ordinal
+            dispatch_ordinal += 1
             content, is_error = outcome["content"], outcome["is_error"]
             results.append(
                 {
@@ -452,6 +525,18 @@ async def _run_candidate(payload: dict[str, Any]) -> dict[str, Any]:
                     "is_error": is_error,
                 }
             )
+            if override_diff is not None and this_ordinal == override_after_ordinal:
+                # KAN-650: this was the recorded `get_schema` call
+                # `reverify_with_fork` forked right after. Every `_complete`/
+                # `_dispatch` call up to and including it was a journal *hit*
+                # (satay never re-executes one — see the module docstring), so
+                # nothing above touched a live warehouse. Stop drafting here:
+                # no further turns, no further tool calls this turn either —
+                # jump straight to verifying the substituted diff.
+                rig = _rig()
+                return await _apply_override_diff_and_verify(
+                    rig.ctx, override_diff, edit_attempts
+                )
         messages.append({"role": "user", "content": results})
 
     rig = _rig()
@@ -519,6 +604,7 @@ async def _verify_and_gate(
     signals = ScoreSignals(
         tier1_passed=bool(run.tier1.passed),
         tier2_passed=run.tier2.passed if run.tier2.ran else None,
+        tier3_passed=evidence["tier3"]["passed"],
         output_schema_unchanged=evidence["output_schema"]["changed"] is False
         if evidence["output_schema"]["changed"] is not None
         else None,
@@ -551,6 +637,375 @@ async def _verify_and_gate(
         "risk_class": scored["risk_class"],
         "factors": scored["factors"],
     }
+
+
+# --- KAN-650: fork-replay tier-3 ----------------------------------------------------
+
+
+async def _apply_override_diff_and_verify(
+    ctx: AgentContext, override_diff: dict[str, str], edit_attempts: int
+) -> dict[str, Any]:
+    """The fork-replay short-circuit's tail: apply a substituted fix, verify it.
+
+    `override_diff` maps repo-relative path -> the file's full substituted
+    content. Deliberately **not** a unified-diff *string* to parse and apply:
+    `WorkingCopy` already models an edit as an ``(original, current)`` content
+    pair and derives the unified diff itself via ``full_diff()`` (see
+    `diffing.py`) — the same mechanism `edit_file` uses. Teaching this module a
+    second, bespoke unified-diff-apply routine (accepting arbitrary diff text,
+    resolving hunks/fuzz) would be new surface area this codebase has never
+    needed; a caller that has a diff to substitute (say, a human-edited
+    variant) applies it to get the resulting file content and passes that.
+
+    The original content for any path not already loaded in `ctx.working` is
+    read fresh via `ctx.source.read` — a plain, deterministic local file read
+    (the same one `read_file` itself performs), not a live warehouse
+    round-trip; nothing here re-touches `ctx.warehouse`.
+
+    Reuses `_verify_and_gate` unchanged after that: verifying a fork-replay
+    candidate is not a different *kind* of verification, only a different diff
+    to verify — same tier-1/tier-2 sandbox gate, same evidence/score shape.
+    """
+    for path, new_content in override_diff.items():
+        if not ctx.working.has(path):
+            ctx.working.load(path, ctx.source.read(path))
+        ctx.working.set_current(path, new_content)
+
+    diff = ctx.working.full_diff()
+    if not diff:
+        return {
+            "outcome": "no_fix",
+            "explanation": (
+                "The substituted fix (override_diff) produced no changes "
+                "against the recorded original content."
+            ),
+            "evidence": None,
+        }
+
+    explanation = (
+        "Re-verified a substituted fix against the recorded schema snapshot "
+        "(KAN-650 fork-replay tier-3)."
+    )
+
+    if ctx.sandbox is None:
+        return {
+            "outcome": "pr_proposed",
+            "diff": diff,
+            "explanation": explanation,
+            "evidence": None,
+            "confidence": None,
+            "risk_class": None,
+        }
+
+    return await _verify_and_gate(ctx, diff, explanation, edit_attempts)
+
+
+@dataclass(frozen=True)
+class ForkPoint:
+    """Where a completed candidate run's `get_schema` call sits, for a KAN-650 fork.
+
+    `fork_point_seq` is the `seq` of that call's own `TaskCompleted` event —
+    passed to `satay.fork(..., fork_point_seq=...)`, which keeps it
+    **inclusive** (the last source event copied, per `satay.api.fork.fork`'s
+    docstring), so the copied prefix ends exactly on "get_schema happened,
+    nothing after it did." `get_schema_ordinal` is the `_dispatch` ordinal of
+    that same call (satay's own `(task_name, ordinal)` identity,
+    `replay/identity.py`) — carried into the fork's own `override_after_ordinal`
+    payload field so `_run_candidate` knows precisely which call to stop after.
+    `source` is the upstream table name that call queried (`ToolCall.input`'s
+    `"source"` field), kept only for a readable tier-3 log line.
+    """
+
+    fork_point_seq: int
+    get_schema_ordinal: int
+    source: str | None
+
+
+async def locate_get_schema_fork_point(
+    store: "SQLiteStore", run_id: str
+) -> ForkPoint | None:
+    """Find the `get_schema` call a KAN-650 fork should cut right after.
+
+    **Policy** (confirmed design — see the ticket): the **last** `get_schema`
+    call before any `edit_file` call. That is the schema state the fix was
+    actually drafted against — a `get_schema` call *after* the first edit
+    would be confirming something the model had already acted on, not the
+    diagnostic read that justified the edit. A `get_schema` call that itself
+    errored (e.g. no warehouse connection configured —
+    `tools.py::AgentContext.get_schema`) is never eligible: it carries no real
+    schema snapshot to re-verify against, only a disclosed error string.
+
+    Degrades gracefully to `None` — no crash, no fork attempted — when the run
+    never called `get_schema` at all, called it but every call errored, or
+    (defensively) scheduled a call that never completed (the run crashed
+    mid-call): a run that never established a usable schema snapshot has no
+    tier-3 signal available. `reverify_with_fork` discloses this via
+    `sandbox/evidence.tier3_not_run` rather than raising, matching this
+    codebase's existing "disclose, don't fabricate" convention
+    (`evidence.py`/`score.py`).
+    """
+    from satay.journal.events import EventType
+
+    events = await store.read_events(run_id)
+
+    get_schema_ordinals: list[int] = []
+    get_schema_sources: dict[int, str | None] = {}
+    first_edit_file_ordinal: int | None = None
+    # ordinal -> (TaskCompleted seq, is_error)
+    completed: dict[int, tuple[int, bool]] = {}
+
+    for event in events:
+        if event.type is EventType.TASK_SCHEDULED:
+            if event.payload.get("task_name") != "_dispatch":
+                continue
+            ordinal = event.payload.get("ordinal")
+            if ordinal is None:  # keyed identity — _dispatch never uses one
+                continue
+            input_ref = event.payload.get("input_ref")
+            call = input_ref[0] if isinstance(input_ref, list) and input_ref else None
+            name = call.get("name") if isinstance(call, dict) else None
+            if name == "get_schema":
+                get_schema_ordinals.append(ordinal)
+                call_input = call.get("input") if isinstance(call, dict) else None
+                get_schema_sources[ordinal] = (
+                    call_input.get("source") if isinstance(call_input, dict) else None
+                )
+            elif name == "edit_file" and first_edit_file_ordinal is None:
+                first_edit_file_ordinal = ordinal
+        elif event.type is EventType.TASK_COMPLETED:
+            if event.payload.get("task_name") != "_dispatch":
+                continue
+            ordinal = event.payload.get("ordinal")
+            if ordinal is None:
+                continue
+            output_ref = event.payload.get("output_ref")
+            is_error = (
+                bool(output_ref.get("is_error"))
+                if isinstance(output_ref, dict)
+                else True
+            )
+            completed[ordinal] = (event.seq, is_error)
+
+    eligible = [
+        ordinal
+        for ordinal in get_schema_ordinals
+        if (first_edit_file_ordinal is None or ordinal < first_edit_file_ordinal)
+        and ordinal in completed
+        and not completed[ordinal][1]  # not an error
+    ]
+    if not eligible:
+        return None
+
+    target_ordinal = max(eligible)
+    fork_point_seq, _ = completed[target_ordinal]
+    return ForkPoint(
+        fork_point_seq=fork_point_seq,
+        get_schema_ordinal=target_ordinal,
+        source=get_schema_sources.get(target_ordinal),
+    )
+
+
+class _UnreachableProvider(LlmProvider):
+    """An `LlmProvider` that must never actually be called.
+
+    `reverify_with_fork`'s rig never needs a real one: the override branch in
+    `_run_candidate` stops at the recorded `get_schema` call and jumps
+    straight to verification, so no further model turn ever happens on a
+    fork-replay drive. If `.complete` runs, `override_after_ordinal` did not
+    land where this module assumed it would — a bug here, not a runtime
+    possibility a caller needs to plan for.
+    """
+
+    def complete(
+        self,
+        system: str,
+        messages: list[dict[str, Any]],
+        tools: list[ToolSpec],
+    ) -> AssistantTurn:  # pragma: no cover - defensive
+        raise AssertionError(
+            "reverify_with_fork's rig had provider.complete() called — the "
+            "override branch should have short-circuited before any further "
+            "model turn; override_after_ordinal did not match the located "
+            "get_schema call"
+        )
+
+
+@dataclass
+class Tier3Outcome:
+    """`reverify_with_fork`'s result.
+
+    `evidence` is exactly `sandbox/evidence.py`'s `tier3` shape (built by
+    `tier3_not_run`/`tier3_result`) — pass it straight into
+    `ScoreSignals(tier3_passed=evidence["passed"], ...)` to re-score an
+    existing candidate, or fold it into an existing evidence dict with
+    `merge_tier3_evidence` below. `fresh_result` is the fork's own, fully
+    independent `RepairResult`-shaped dict — `None` only when `evidence["ran"]`
+    is `False` (no fork was ever attempted; see
+    `locate_get_schema_fork_point`'s degrade cases).
+    """
+
+    evidence: dict[str, Any]
+    fork_run_id: str | None
+    fresh_result: dict[str, Any] | None
+
+
+def merge_tier3_evidence(
+    evidence: dict[str, Any], tier3: dict[str, Any]
+) -> dict[str, Any]:
+    """Fold a `reverify_with_fork` tier-3 block into an existing evidence dict.
+
+    A convenience for a future caller that wants to re-score an *existing*
+    `RepairResult`'s evidence with a fork-replay verdict (e.g. a human
+    re-verifying a stored candidate through the dashboard) without hand-
+    building the merge. Returns a new dict; `evidence` is never mutated.
+    """
+    return {**evidence, "tier3": tier3}
+
+
+async def _read_workflow_input(store: "SQLiteStore", run_id: str) -> dict[str, Any]:
+    """The recorded `payload` dict `run_id`'s own workflow was started with.
+
+    Read straight off its `WorkflowCreated` event rather than asked of the
+    caller: `reverify_with_fork` only needs `source_run_id`, not a second copy
+    of `task`/`max_turns`/`tools` the caller would have to keep byte-for-byte
+    in sync with what the source run actually recorded — and it must be
+    byte-for-byte, since the copied prefix only replays identically if the
+    turn loop reaches the exact same point it did originally (see
+    `_run_candidate`'s docstring on why `max_turns` in particular matters).
+    """
+    from satay.journal.events import EventType
+
+    for event in await store.read_events(run_id):
+        if event.type is EventType.WORKFLOW_CREATED:
+            input_ref = event.payload.get("input_ref")
+            return dict(input_ref) if isinstance(input_ref, dict) else {}
+    raise ValueError(f"run {run_id!r} has no WorkflowCreated event")
+
+
+def _tier3_passed_from_result(result: dict[str, Any]) -> bool | None:
+    """Derive tier-3 pass/fail from the fork's own fresh `RepairResult`.
+
+    `pr_proposed` **with evidence attached** means the substituted diff passed
+    tier-1 (and tier-2, if configured) under the recorded conditions: a clean
+    pass. `pr_proposed` with `evidence: null` means the fork's own rig had no
+    `sandbox` configured (mirrors `_apply_override_diff_and_verify`'s
+    unverified-draft branch) — nothing was actually re-verified, so this is
+    undetermined, not a pass, exactly like a normal unverified V2-shaped draft.
+    `no_fix` with evidence attached means it was drafted, verified, and
+    rejected by the compile gate: a clean fail. `no_fix` with no evidence at
+    all means the override diff produced no changes to verify in the first
+    place (see `_apply_override_diff_and_verify`) — also undetermined.
+    """
+    if result.get("outcome") == "pr_proposed":
+        return True if result.get("evidence") is not None else None
+    if result.get("outcome") == "no_fix" and result.get("evidence") is not None:
+        return False
+    return None
+
+
+async def _reverify_with_fork(
+    store: "SQLiteStore",
+    source_run_id: str,
+    override_diff: dict[str, str],
+    ctx: AgentContext,
+) -> "Tier3Outcome":
+    from ..sandbox.evidence import tier3_not_run, tier3_result
+
+    fork_point = await locate_get_schema_fork_point(store, source_run_id)
+    if fork_point is None:
+        return Tier3Outcome(
+            evidence=tier3_not_run(
+                f"run {source_run_id!r} never completed a usable get_schema "
+                "call before drafting (either it called get_schema zero "
+                "times, or every call errored) — no recorded schema snapshot "
+                "to fork-replay against"
+            ),
+            fork_run_id=None,
+            fresh_result=None,
+        )
+
+    original_payload = await _read_workflow_input(store, source_run_id)
+    payload = {
+        **original_payload,
+        "override_diff": override_diff,
+        "override_after_ordinal": fork_point.get_schema_ordinal,
+    }
+
+    rig = _Rig(provider=_UnreachableProvider(), ctx=ctx)
+    token = _RIG.set(rig)
+    rigs_token = None
+    candidate_key = original_payload.get("candidate_key")
+    if candidate_key is not None:
+        # The source run was an N>1 `_candidate_workflow` child — its own body
+        # binds `_RIG` from `_RIGS[candidate_key]` (see `_candidate_workflow`),
+        # so the fork (re-driving that same workflow function) needs the same
+        # lookup to succeed for the same key.
+        rigs_token = _RIGS.set({candidate_key: rig})
+    try:
+        handle = await satay.fork(
+            source_run_id,
+            fork_point_seq=fork_point.fork_point_seq,
+            workflow_input=payload,
+            store=store,
+        )
+        result = await handle.result()
+    finally:
+        _RIG.reset(token)
+        if rigs_token is not None:
+            _RIGS.reset(rigs_token)
+
+    fork_run_id = handle.run_id
+    tier3 = tier3_result(
+        passed=_tier3_passed_from_result(result),
+        source_run_id=source_run_id,
+        fork_run_id=fork_run_id,
+        get_schema_ordinal=fork_point.get_schema_ordinal,
+        log=(
+            f"forked {source_run_id} at get_schema ordinal "
+            f"{fork_point.get_schema_ordinal} (source={fork_point.source!r}); "
+            f"fork run {fork_run_id} -> outcome={result.get('outcome')!r}"
+        ),
+    )
+    return Tier3Outcome(evidence=tier3, fork_run_id=fork_run_id, fresh_result=result)
+
+
+def reverify_with_fork(
+    source_run_id: str,
+    override_diff: dict[str, str],
+    ctx: AgentContext,
+    journal_path: str | Path | None = None,
+) -> Tier3Outcome:
+    """KAN-650 entry point: re-verify `override_diff` against `source_run_id`'s
+    recorded `get_schema` snapshot via a real Satay fork, synchronously.
+
+    `source_run_id` must be a completed run of `_repair_workflow` or
+    `_candidate_workflow` (i.e. a `transcript.run_id` this module itself
+    produced — `run_repair_satay`/`run_repair_satay_candidates`) persisted in
+    the journal at `journal_path` (default `Config.satay_journal_dir`, same as
+    every other entry point below). `ctx` supplies this call's own live
+    resources (a fresh `WorkingCopy`, the same read-only `source`, and a real
+    `sandbox` to actually re-verify against — `ctx.warehouse` is never read by
+    a fork-replay drive, since the one `get_schema` call in play is always a
+    journal hit, so it may safely be `None`).
+
+    Mirrors `run_repair_satay`'s synchronous, open-store-drive-close shape.
+    Never raises for a `source_run_id` with no usable `get_schema` call — see
+    `locate_get_schema_fork_point` — but does propagate a real
+    `satay.control.commands.ForkValidationError` for a genuinely bad
+    `source_run_id` (unknown run, non-terminal run, ...), the same way
+    `satay.fork` itself would for any other caller.
+    """
+    from satay.journal.store import SQLiteStore
+
+    path = Path(journal_path) if journal_path is not None else _default_journal_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    store = SQLiteStore.open(path)
+    try:
+        return asyncio.run(
+            _reverify_with_fork(store, source_run_id, override_diff, ctx)
+        )
+    finally:
+        store.close()
 
 
 # --- N>1: one child workflow per candidate, fanned out with collect-mode gather ----

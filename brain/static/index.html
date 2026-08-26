@@ -127,7 +127,7 @@
         ${logHtml}</li>`;
     }
     function renderEvidence(ev) {
-      const t1 = ev.tier1 || {}, t2 = ev.tier2 || {}, os = ev.output_schema || {};
+      const t1 = ev.tier1 || {}, t2 = ev.tier2 || {}, t3 = ev.tier3 || {}, os = ev.output_schema || {};
       const rows = [];
       rows.push(evRow(
         "compiled (dbt compile)",
@@ -137,6 +137,22 @@
         rows.push(evRow("ran on sample (dbt build)", t2.passed ? "pass" : "fail", null, t2.log));
       } else {
         rows.push(evRow("sample run", "na", "not configured", null));
+      }
+      // KAN-650 — tier-3 (fork-replay against a recorded get_schema snapshot,
+      // worker/sbflow_worker/agent/satay_loop.py::reverify_with_fork). Unlike
+      // tier-1/tier-2, tier-3 is opt-in and not run for every job (see that
+      // module's "invocation-scope decision") — deliberately unlike the
+      // always-on rows above, this row only appears when a fork-replay
+      // actually ran, so a run nothing has triggered this on shows no row at
+      // all rather than a "not run" line on every single dashboard page.
+      if (t3.ran) {
+        const detail = t3.source_run_id
+          ? `forked ${t3.source_run_id} at get_schema #${t3.get_schema_ordinal}`
+          : null;
+        rows.push(evRow(
+          "fork-replay (recorded schema snapshot)",
+          t3.passed === true ? "pass" : t3.passed === false ? "fail" : "na",
+          detail, t3.log));
       }
       const osState = os.changed === false ? "pass" : os.changed === true ? "fail" : "na";
       rows.push(evRow(
