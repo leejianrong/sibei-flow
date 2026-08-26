@@ -405,7 +405,7 @@ _REJECTED_EDIT_TURN = {
 
 @pytest.mark.infra
 @pytest.mark.skipif(shutil.which("docker") is None, reason="docker CLI not available")
-def test_multi_candidate_picks_highest_confidence_among_survivors():
+def test_multi_candidate_picks_highest_confidence_among_survivors(tmp_path):
     """Two candidates draft the identical fix and hit the identical tier-1/tier-2
     verdict; the only difference is `edit_attempts` (1 vs 2). `score.py` strictly
     penalizes extra attempts, so candidate 0 always outscores candidate 1 — whether
@@ -416,10 +416,18 @@ def test_multi_candidate_picks_highest_confidence_among_survivors():
     attempts_turns = [_REJECTED_EDIT_TURN, *clean_turns]
 
     expected_winner = run_repair_satay(
-        ReplayProvider(list(clean_turns)), _sandboxed_ctx(), _task(), max_turns=8
+        ReplayProvider(list(clean_turns)),
+        _sandboxed_ctx(),
+        _task(),
+        max_turns=8,
+        journal_path=tmp_path / "expected_winner.db",
     )
     loser = run_repair_satay(
-        ReplayProvider(list(attempts_turns)), _sandboxed_ctx(), _task(), max_turns=8
+        ReplayProvider(list(attempts_turns)),
+        _sandboxed_ctx(),
+        _task(),
+        max_turns=8,
+        journal_path=tmp_path / "loser.db",
     )
 
     # Both candidates drafted a diff and reached the scorer (never the "no diff
@@ -436,8 +444,14 @@ def test_multi_candidate_picks_highest_confidence_among_survivors():
             ReplayProvider(list(attempts_turns)),
         ]
     )
+    journal_path = tmp_path / "satay.db"
     result = run_repair_satay_candidates(
-        factory, _sandboxed_ctx(), _task(), max_turns=8, n_candidates=2
+        factory,
+        _sandboxed_ctx(),
+        _task(),
+        max_turns=8,
+        n_candidates=2,
+        journal_path=journal_path,
     )
 
     def _normalized(r: dict[str, Any]) -> dict[str, Any]:
@@ -451,14 +465,16 @@ def test_multi_candidate_picks_highest_confidence_among_survivors():
                 if tier in evidence and evidence[tier].get("log"):
                     evidence[tier] = {**evidence[tier], "log": "<normalized>"}
             r["evidence"] = evidence
+        r.pop("transcript", None)
         return r
 
     assert _normalized(result) == _normalized(expected_winner)
+    _assert_journal_transcript(result["transcript"], journal_path=journal_path)
 
 
 @pytest.mark.infra
 @pytest.mark.skipif(shutil.which("docker") is None, reason="docker CLI not available")
-def test_multi_candidate_survives_a_tier1_compile_failure():
+def test_multi_candidate_survives_a_tier1_compile_failure(tmp_path):
     """One candidate's draft points at a table that does not exist (tier-1 fails,
     deterministically, regardless of environment); collect mode must not let that
     sink the run — the other candidate still settles and the run still produces one
@@ -481,7 +497,11 @@ def test_multi_candidate_survives_a_tier1_compile_failure():
         {"text": "Attempted a fix."},
     ]
     broken = run_repair_satay(
-        ReplayProvider(list(broken_turns)), _sandboxed_ctx(), _task(), max_turns=6
+        ReplayProvider(list(broken_turns)),
+        _sandboxed_ctx(),
+        _task(),
+        max_turns=6,
+        journal_path=tmp_path / "broken.db",
     )
     assert broken["outcome"] == "no_fix"
     assert broken["evidence"]["tier1"]["passed"] is False
@@ -492,8 +512,14 @@ def test_multi_candidate_survives_a_tier1_compile_failure():
             ReplayProvider(list(broken_turns)),
         ]
     )
+    journal_path = tmp_path / "satay.db"
     result = run_repair_satay_candidates(
-        factory, _sandboxed_ctx(), _task(), max_turns=8, n_candidates=2
+        factory,
+        _sandboxed_ctx(),
+        _task(),
+        max_turns=8,
+        n_candidates=2,
+        journal_path=journal_path,
     )
 
     # A real, individually-attributable candidate result — never the synthetic
@@ -501,3 +527,4 @@ def test_multi_candidate_survives_a_tier1_compile_failure():
     # results, and this run always has at least the broken candidate settled).
     assert result["outcome"] in ("pr_proposed", "no_fix")
     assert not result["explanation"].startswith("All 2 candidate(s) failed to run")
+    _assert_journal_transcript(result["transcript"], journal_path=journal_path)

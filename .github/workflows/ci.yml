@@ -107,6 +107,16 @@ jobs:
       SANDBOX_TIMEOUT: "180"
       # Keyless deterministic provider — never a real API key in the gate.
       LLM_PROVIDER: replay
+      # KAN-649: belt-and-braces default for Config.satay_journal_dir. Every
+      # test that drives run_repair_satay(_candidates) already passes its own
+      # tmp_path-scoped journal_path explicitly, so nothing here should ever
+      # fall through to this — but pytest runs natively on the runner (not
+      # root-in-a-container the way `make test-worker`'s Docker run does), so
+      # the hardcoded production default (/var/lib/sbflow/satay) is NOT
+      # writable here. Point it at a runner-writable path as a safety net
+      # against a future test forgetting journal_path, rather than relying
+      # solely on test discipline.
+      SBFLOW_SATAY_JOURNAL_DIR: /tmp/sbflow-satay-ci
     steps:
       - uses: actions/checkout@v7
 
