@@ -15,6 +15,8 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::models::JobRow;
+use crate::pr;
+use crate::SatayJournalDir;
 
 /// `GET /api/runs` — most-recent-first history of every failure seen.
 pub async fn list_runs(
@@ -39,8 +41,17 @@ pub async fn list_runs(
 }
 
 /// `GET /api/runs/:id` — full detail for one run.
+///
+/// KAN-651: merges in a `usage` key (per-run cost) when the job's
+/// `RepairResult.transcript` is the `journal` arm — a real read of the
+/// worker's persisted Satay journal (`pr::aggregate_usage`), the same reader
+/// `pr::body::render_body` uses for the PR body's own cost line, so the
+/// dashboard and the PR never independently compute (and risk disagreeing on)
+/// "what did this run cost". Absent entirely for the `lines` arm or when
+/// `transcript` itself is unset — nothing to read a run_id out of.
 pub async fn get_run(
     State(pool): State<PgPool>,
+    State(journal_dir): State<SatayJournalDir>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     let row = sqlx::query_as::<_, JobRow>(
@@ -58,7 +69,16 @@ pub async fn get_run(
     .map_err(internal)?;
 
     match row {
-        Some(r) => Ok(Json(r.detail())),
+        Some(r) => {
+            let mut detail = r.detail();
+            if let Some(transcript) = r.result.as_ref().and_then(|res| res.get("transcript")) {
+                if let Some((run_ids, journal_ref)) = pr::cost_run_ids(transcript) {
+                    let usage = pr::aggregate_usage(&journal_dir.0, &run_ids, &journal_ref).await;
+                    detail["usage"] = usage.to_json();
+                }
+            }
+            Ok(Json(detail))
+        }
         None => Err((StatusCode::NOT_FOUND, "run not found".to_string())),
     }
 }

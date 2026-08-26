@@ -38,11 +38,31 @@ class ToolCall:
 
 @dataclass
 class AssistantTurn:
-    """One model turn: free text plus any tool calls it wants executed."""
+    """One model turn: free text plus any tool calls it wants executed.
+
+    `usage` (KAN-651) is an optional per-call model-usage self-report: whatever
+    the provider itself surfaces about this one call, keyed to line up with
+    `satay.TaskContext.record_model_usage`'s kwargs (`model`, `input_tokens`,
+    `output_tokens`), plus any provider-specific extra fields a caller wants to
+    ride along. `None` when the provider reports no usage at all — always true
+    for `ReplayProvider` (there is no real call to report), and possibly true
+    for a live provider whose response genuinely carries no usage block.
+
+    This is *not* one of CLAUDE.md's frozen contracts (`RepairResult`, the
+    `Failure` payload, the agent tool contract) — it is `LlmProvider.complete`'s
+    return shape, a plain code change, not an ADR. Deliberately carries only
+    what the provider itself reports: no `usd` estimate is computed anywhere in
+    this codebase, because a hardcoded cost-per-token table is a maintenance
+    trap (pricing changes silently go stale) that this codebase's own
+    conventions argue against — see `score.py`'s "not configured" and
+    `evidence.py`'s "undetermined" disclosures for the established pattern of
+    showing what is actually known rather than fabricating a number.
+    """
 
     text: str = ""
     tool_calls: list[ToolCall] = field(default_factory=list)
     stop_reason: str = "end_turn"
+    usage: dict[str, Any] | None = None
 
 
 class LlmProvider(ABC):

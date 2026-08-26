@@ -194,6 +194,100 @@ def test_parity_unverified_draft_no_sandbox_configured(tmp_path):
     _assert_parity(scripted, tmp_path)
 
 
+# --- KAN-651: cost accounting — usage recorded onto, and readable from, the ---------
+# --- journal `_complete` calls into via `ctx.record_model_usage` -------------------
+
+
+def _usage_entries(journal_path: Path, run_id: str) -> list[dict]:
+    """Read back every `ctx.record_model_usage` entry for `run_id`, mirroring
+    `examples/best_of_n_demo.py`'s `journal_usd()` read pattern (Satay's own
+    `satay.journal.timeline.model_usage` helper, not hand-rolled event parsing).
+    """
+    from satay.journal.store import SQLiteStore
+    from satay.journal.timeline import model_usage
+
+    store = SQLiteStore.open(journal_path)
+    try:
+        events = asyncio.run(store.read_events(run_id))
+    finally:
+        store.close()
+    return model_usage(events)
+
+
+def test_usage_recorded_and_readable_from_the_journal(tmp_path):
+    """A provider that reports usage on its turn gets that usage persisted onto
+    the run's own journal, readable back exactly as `journal.rs`'s
+    `aggregate_usage` (brain side) and this test both do it: via the generic
+    usage slot on `TaskCompleted`/`TaskAttemptFailed`, not a hand-built log.
+    """
+    scripted = [
+        {
+            "text": "",
+            "tool_calls": [
+                {
+                    "name": "edit_file",
+                    "input": {
+                        "path": MODEL,
+                        "old_string": "customer_id,",
+                        "new_string": "cust_id as customer_id,",
+                    },
+                }
+            ],
+            "usage": {"model": "test-model", "input_tokens": 123, "output_tokens": 45},
+        },
+        {"text": "Aliased cust_id back to customer_id.", "usage": {"input_tokens": 7}},
+    ]
+    journal_path = tmp_path / "satay.db"
+    result = run_repair_satay(
+        ReplayProvider(list(scripted)),
+        _ctx(),
+        _task(),
+        max_turns=6,
+        journal_path=journal_path,
+    )
+    run_id = _assert_journal_transcript(result["transcript"], journal_path=journal_path)
+
+    entries = _usage_entries(journal_path, run_id)
+    assert len(entries) == 2
+    total_input = sum(e.get("input_tokens", 0) for e in entries)
+    total_output = sum(e.get("output_tokens", 0) for e in entries)
+    assert total_input == 123 + 7
+    assert total_output == 45
+    assert {"model": "test-model", "input_tokens": 123, "output_tokens": 45} in entries
+
+
+def test_usage_absent_when_the_provider_reports_none(tmp_path):
+    """`ReplayProvider`'s default (no `"usage"` key on any scripted turn) records
+    nothing — no crash, and the journal read side must see "not available" (an
+    empty list), never a fabricated zero.
+    """
+    scripted = [
+        {
+            "tool_calls": [
+                {
+                    "name": "edit_file",
+                    "input": {
+                        "path": MODEL,
+                        "old_string": "customer_id,",
+                        "new_string": "cust_id as customer_id,",
+                    },
+                }
+            ]
+        },
+        {"text": "Aliased cust_id back to customer_id."},
+    ]
+    journal_path = tmp_path / "satay.db"
+    result = run_repair_satay(
+        ReplayProvider(list(scripted)),
+        _ctx(),
+        _task(),
+        max_turns=6,
+        journal_path=journal_path,
+    )
+    run_id = _assert_journal_transcript(result["transcript"], journal_path=journal_path)
+    assert _usage_entries(journal_path, run_id) == []
+
+
 # --- infra: warehouse only (get_schema through a real read-only connection) -------
 
 WAREHOUSE_URL = os.environ.get(

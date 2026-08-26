@@ -75,6 +75,183 @@ pub async fn render(journal_dir: &str, run_id: &str, journal_ref: &str) -> Strin
     }
 }
 
+// --- KAN-651: per-run cost accounting -----------------------------------------------
+//
+// Satay records model/token usage via `ctx.record_model_usage` (opt-in self-report,
+// ADR-0008) into a generic usage slot the executor flushes onto whichever event ends
+// an attempt — `TaskCompleted` on success, `TaskAttemptFailed` on a raise (KAN-479: a
+// retried task's failed attempts were billed too). `aggregate_usage` below sums that
+// slot across one or more runs in the same journal file, mirroring
+// `examples/best_of_n_demo.py`'s `journal_usd()` read pattern translated to Rust: read
+// every `TaskCompleted`/`TaskAttemptFailed` event, pull `payload["usage"]` (a plain
+// JSON array — `ctx.record_model_usage`'s kwargs are always JSON-native primitives, so
+// this reads the raw values directly rather than going through `decode_value` the way
+// `render`'s task input/output rendering must for arbitrary Python return types), and
+// tally.
+//
+// **Deliberately no dollar figure is computed here.** `AssistantTurn.usage` (worker
+// side, `llm/base.py`) only ever carries what a provider itself reports — token counts
+// and a model name, never a `usd` field — because no cost-per-token table lives in this
+// codebase (pricing changes silently go stale; see that docstring for the full
+// reasoning). This reader therefore only ever has token counts and model names to sum;
+// `pr/body.rs` and the run-detail API render those honestly rather than inventing a
+// price.
+
+/// Aggregated `ctx.record_model_usage` totals across one or more runs sharing one
+/// journal file. Read-only and best-effort: a missing file, an unreadable row, or an
+/// empty `run_ids` list all degrade to `UsageSummary::default()` (`is_empty() == true`)
+/// rather than an error — the same graceful-fallback posture `render` above takes,
+/// since a usage-render hiccup must not break the PR body or the run-detail API.
+#[derive(Debug, Default, Clone, PartialEq, serde::Serialize)]
+pub struct UsageSummary {
+    pub total_input_tokens: i64,
+    pub total_output_tokens: i64,
+    /// Distinct `model` values seen across every usage entry, in first-seen order.
+    pub models: Vec<String>,
+    /// How many usage entries contributed. Not the same as "how many model calls
+    /// succeeded" — a retried task's failed attempts each add their own entry too
+    /// (KAN-479: the provider billed them whether or not they produced a usable
+    /// answer), which is the honest total, not an undercount.
+    pub entry_count: usize,
+}
+
+impl UsageSummary {
+    /// True when nothing was found to sum — either no run in `run_ids` ever called
+    /// `ctx.record_model_usage` (e.g. every candidate used the keyless `replay`
+    /// provider, which reports no usage at all), or the journal itself was
+    /// unreadable. Callers must render this as "not available", never as a $0/0-token
+    /// cost — see `AssistantTurn.usage`'s docstring on the worker side for why
+    /// "unknown" and "zero" are not the same claim.
+    pub fn is_empty(&self) -> bool {
+        self.entry_count == 0
+    }
+
+    /// The JSON shape `api::get_run` merges into the run-detail response and
+    /// `brain/static/index.html`'s dashboard reads. `available` makes the
+    /// "not available" case explicit for the frontend rather than making it infer
+    /// absence from all-zero numbers.
+    pub fn to_json(&self) -> Value {
+        serde_json::json!({
+            "available": !self.is_empty(),
+            "input_tokens": self.total_input_tokens,
+            "output_tokens": self.total_output_tokens,
+            "total_tokens": self.total_input_tokens + self.total_output_tokens,
+            "models": self.models,
+            "entry_count": self.entry_count,
+        })
+    }
+}
+
+/// Extract `(run_ids, journal_ref)` to aggregate cost over, from one
+/// `RepairResult.transcript` value (KAN-651). `None` for anything but the `journal`
+/// arm — the `lines` arm predates the Satay port and has no usage source at all, so
+/// there is nothing to read a run_id out of.
+///
+/// `cost_run_ids` (see `satay_loop.py`'s `_journal_transcript`) is an additive,
+/// optional key within the `journal` arm, present only for N>1 candidate runs: it
+/// names every candidate's own child run_id, so summing usage across it prices the
+/// WHOLE job, not just the winning candidate (KAN-651's N-candidate decision — a
+/// losing candidate's model calls were real spend too). Absent (N=1, or an older
+/// worker), this falls back to `[run_id]` — the one run whose journal actually
+/// produced the shipped result, which is the correct and only cost source when there
+/// was a single candidate.
+pub fn cost_run_ids(transcript: &Value) -> Option<(Vec<String>, String)> {
+    if transcript.get("kind").and_then(Value::as_str) != Some("journal") {
+        return None;
+    }
+    let run_id = transcript.get("run_id").and_then(Value::as_str)?;
+    let journal_ref = transcript
+        .get("ref")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(DEFAULT_REF)
+        .to_string();
+    let run_ids = transcript
+        .get("cost_run_ids")
+        .and_then(Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .filter_map(Value::as_str)
+                .map(String::from)
+                .collect::<Vec<_>>()
+        })
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| vec![run_id.to_string()]);
+    Some((run_ids, journal_ref))
+}
+
+/// Sum `ctx.record_model_usage` entries across `run_ids` in `{journal_dir}/{journal_ref}`.
+/// Never panics, never propagates an error — see `UsageSummary`'s doc comment.
+pub async fn aggregate_usage(
+    journal_dir: &str,
+    run_ids: &[String],
+    journal_ref: &str,
+) -> UsageSummary {
+    let journal_ref = if journal_ref.is_empty() {
+        DEFAULT_REF
+    } else {
+        journal_ref
+    };
+    let db_path = Path::new(journal_dir).join(journal_ref);
+    aggregate_usage_inner(&db_path, run_ids)
+        .await
+        .unwrap_or_default()
+}
+
+async fn aggregate_usage_inner(
+    db_path: &Path,
+    run_ids: &[String],
+) -> Result<UsageSummary, sqlx::Error> {
+    let mut summary = UsageSummary::default();
+    if !db_path.exists() || run_ids.is_empty() {
+        return Ok(summary);
+    }
+    let opts = SqliteConnectOptions::new()
+        .filename(db_path)
+        .read_only(true);
+    // Same short-lived, single-connection-pool posture as `render_inner` above, for
+    // the same reasons (the journal may not exist yet; WAL mode lets this reader
+    // coexist with the worker's own writer without contention).
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(opts)
+        .await?;
+
+    let mut seen_models = std::collections::HashSet::new();
+    for run_id in run_ids {
+        let rows = sqlx::query(
+            "SELECT payload_json FROM events WHERE run_id = ? \
+             AND type IN ('TaskCompleted', 'TaskAttemptFailed') ORDER BY seq",
+        )
+        .bind(run_id)
+        .fetch_all(&pool)
+        .await?;
+        for row in &rows {
+            let payload_json: String = row.try_get("payload_json")?;
+            let payload: Value = serde_json::from_str(&payload_json).unwrap_or(Value::Null);
+            let Some(usage_entries) = payload.get("usage").and_then(Value::as_array) else {
+                continue;
+            };
+            for entry in usage_entries {
+                summary.entry_count += 1;
+                if let Some(t) = entry.get("input_tokens").and_then(Value::as_i64) {
+                    summary.total_input_tokens += t;
+                }
+                if let Some(t) = entry.get("output_tokens").and_then(Value::as_i64) {
+                    summary.total_output_tokens += t;
+                }
+                if let Some(m) = entry.get("model").and_then(Value::as_str) {
+                    if seen_models.insert(m.to_string()) {
+                        summary.models.push(m.to_string());
+                    }
+                }
+            }
+        }
+    }
+    pool.close().await;
+    Ok(summary)
+}
+
 async fn render_inner(db_path: &Path, run_id: &str) -> Result<Option<String>, sqlx::Error> {
     if !db_path.exists() {
         return Ok(None);
@@ -364,6 +541,56 @@ pub(crate) mod fixtures {
         .unwrap();
         pool.close().await;
     }
+
+    /// Append one `TaskCompleted` event carrying a `ctx.record_model_usage`-shaped
+    /// `usage` array (KAN-651) for `run_id`, at seq `seq` — reused by
+    /// `journal.rs`'s own `aggregate_usage`/`cost_run_ids` tests and by `body.rs`'s
+    /// cost-line test, so both share one fixture builder rather than each hand-rolling
+    /// event rows. `usage_json` is the raw JSON array text, e.g.
+    /// `r#"[{"model":"m0","input_tokens":10,"output_tokens":5}]"#`. `CREATE TABLE IF
+    /// NOT EXISTS` so this works standalone or layered on top of
+    /// `write_minimal_journal` at the same path.
+    pub(crate) async fn write_usage_event(
+        dir: &std::path::Path,
+        run_id: &str,
+        seq: i64,
+        usage_json: &str,
+    ) {
+        let db_path = dir.join("satay.db");
+        let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", db_path.display()))
+            .unwrap()
+            .create_if_missing(true);
+        let pool = SqlitePool::connect_with(opts).await.unwrap();
+        pool.execute(
+            r#"
+            CREATE TABLE IF NOT EXISTS events (
+                run_id       TEXT NOT NULL,
+                seq          INTEGER NOT NULL,
+                event_id     TEXT NOT NULL UNIQUE,
+                type         TEXT NOT NULL,
+                ts           TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                PRIMARY KEY (run_id, seq)
+            );
+            "#,
+        )
+        .await
+        .unwrap();
+        let payload =
+            format!(r#"{{"task_name":"_complete","ordinal":{seq},"usage":{usage_json}}}"#);
+        sqlx::query(
+            "INSERT INTO events (run_id, seq, event_id, type, ts, payload_json) \
+             VALUES (?, ?, ?, 'TaskCompleted', '2026-08-26T00:00:02+00:00', ?)",
+        )
+        .bind(run_id)
+        .bind(seq)
+        .bind(format!("{run_id}-u{seq}"))
+        .bind(payload)
+        .execute(&pool)
+        .await
+        .unwrap();
+        pool.close().await;
+    }
 }
 
 #[cfg(test)]
@@ -573,5 +800,149 @@ mod tests {
         let out = render(dir.path().to_str().unwrap(), run_id, "satay.db").await;
         assert!(out.contains("large value stored separately"));
         assert!(out.contains("not found"));
+    }
+
+    // --- KAN-651: cost accounting -----------------------------------------------
+
+    #[tokio::test]
+    async fn aggregate_usage_sums_across_task_completed_and_task_attempt_failed() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("satay.db");
+        let pool = fixture_pool(&db_path).await;
+
+        let run_id = "r10";
+        insert_event(
+            &pool,
+            run_id,
+            1,
+            "TaskCompleted",
+            r#"{"task_name":"_complete","ordinal":0,"usage":[{"model":"m0","input_tokens":100,"output_tokens":20}]}"#,
+        )
+        .await;
+        // A retried attempt that failed was billed too (KAN-479) — its usage must
+        // still count.
+        insert_event(
+            &pool,
+            run_id,
+            2,
+            "TaskAttemptFailed",
+            r#"{"task_name":"_complete","ordinal":1,"attempt":1,"error":{"type":"RuntimeError","message":"boom"},"usage":[{"model":"m0","input_tokens":50,"output_tokens":0}]}"#,
+        )
+        .await;
+        pool.close().await;
+
+        let summary = aggregate_usage(
+            dir.path().to_str().unwrap(),
+            &[run_id.to_string()],
+            "satay.db",
+        )
+        .await;
+
+        assert!(!summary.is_empty());
+        assert_eq!(summary.total_input_tokens, 150);
+        assert_eq!(summary.total_output_tokens, 20);
+        assert_eq!(summary.entry_count, 2);
+        assert_eq!(summary.models, vec!["m0".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn aggregate_usage_sums_across_multiple_run_ids() {
+        // The N-candidate "total across all candidates" case: two sibling child
+        // runs in the same journal file, both counted.
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("satay.db");
+        let pool = fixture_pool(&db_path).await;
+
+        insert_event(
+            &pool,
+            "c0",
+            1,
+            "TaskCompleted",
+            r#"{"task_name":"_complete","ordinal":0,"usage":[{"model":"m0","input_tokens":100,"output_tokens":10}]}"#,
+        )
+        .await;
+        insert_event(
+            &pool,
+            "c1",
+            1,
+            "TaskCompleted",
+            r#"{"task_name":"_complete","ordinal":0,"usage":[{"model":"m1","input_tokens":200,"output_tokens":20}]}"#,
+        )
+        .await;
+        pool.close().await;
+
+        let summary = aggregate_usage(
+            dir.path().to_str().unwrap(),
+            &["c0".to_string(), "c1".to_string()],
+            "satay.db",
+        )
+        .await;
+
+        assert_eq!(summary.total_input_tokens, 300);
+        assert_eq!(summary.total_output_tokens, 30);
+        assert_eq!(summary.entry_count, 2);
+        assert_eq!(summary.models, vec!["m0".to_string(), "m1".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn aggregate_usage_is_empty_when_no_run_ever_reported_usage() {
+        // The `replay` provider (or a live provider whose response carried no
+        // usage block) — must degrade to "not available", never a fabricated zero
+        // that looks the same as "we know this cost nothing".
+        let dir = tempfile::tempdir().unwrap();
+        fixtures::write_minimal_journal(dir.path(), "r11").await;
+
+        let summary = aggregate_usage(
+            dir.path().to_str().unwrap(),
+            &["r11".to_string()],
+            "satay.db",
+        )
+        .await;
+
+        assert!(summary.is_empty());
+        assert_eq!(summary.total_input_tokens, 0);
+        assert!(summary.models.is_empty());
+        assert!(!summary.to_json()["available"].as_bool().unwrap());
+    }
+
+    #[tokio::test]
+    async fn aggregate_usage_missing_file_degrades_to_empty_not_a_crash() {
+        let dir = tempfile::tempdir().unwrap();
+        let summary = aggregate_usage(
+            dir.path().to_str().unwrap(),
+            &["does-not-exist".to_string()],
+            "satay.db",
+        )
+        .await;
+        assert!(summary.is_empty());
+    }
+
+    #[test]
+    fn cost_run_ids_falls_back_to_run_id_when_absent() {
+        let t = serde_json::json!({"kind": "journal", "run_id": "r1", "ref": "satay.db"});
+        let (run_ids, journal_ref) = cost_run_ids(&t).unwrap();
+        assert_eq!(run_ids, vec!["r1".to_string()]);
+        assert_eq!(journal_ref, "satay.db");
+    }
+
+    #[test]
+    fn cost_run_ids_uses_every_candidate_when_present() {
+        let t = serde_json::json!({
+            "kind": "journal",
+            "run_id": "winner",
+            "ref": "satay.db",
+            "cost_run_ids": ["c0", "c1", "c2"],
+        });
+        let (run_ids, _) = cost_run_ids(&t).unwrap();
+        assert_eq!(
+            run_ids,
+            vec!["c0".to_string(), "c1".to_string(), "c2".to_string()]
+        );
+    }
+
+    #[test]
+    fn cost_run_ids_is_none_for_the_lines_arm() {
+        let t = serde_json::json!({"kind": "lines", "lines": ["a"]});
+        assert!(cost_run_ids(&t).is_none());
     }
 }

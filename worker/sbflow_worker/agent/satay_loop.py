@@ -44,6 +44,19 @@ never a losing candidate's) for N>1 — resolved from the parent's own
 knows the shared directory from its own `SBFLOW_SATAY_JOURNAL_DIR`, so `ref` only needs
 to name *which file inside it*, not repeat the directory.
 
+**KAN-651 update (EPIC-84, cost accounting):** `_complete` now self-reports
+whatever token usage the provider surfaced on that call (`turn.usage`) onto its
+own `TaskContext` via `ctx.record_model_usage(...)` — a generic, provider-agnostic
+usage slot satay's executor flushes onto the attempt's own `TaskCompleted`/
+`TaskAttemptFailed` event, exactly the mechanism `examples/best_of_n_demo.py`
+demonstrates. No parallel accounting is kept in Python: `journal.rs` (brain side)
+sums usage straight out of the journal at render time, the same "the journal is
+the source of truth, not a second artifact that can drift" posture ADR-0013
+already established for the reasoning transcript. `_journal_transcript` gained
+one additive, optional key (`cost_run_ids`) so the N>1 path can point a cost
+reader at every candidate's own run, not just the winner's — see
+`_drive_multi_candidate`'s docstring for that decision's reasoning.
+
 This still does not touch `repair_jobs`, the lease/claim loop, brain reconcile, the
 orphan sweep, or `LISTEN/NOTIFY` (ADR-0012's capability freeze) — the journal file is a
 new *artifact on disk*, not new durable state sibei-flow's own claim loop depends on;
@@ -304,9 +317,25 @@ async def _complete(
     No `retries=` here: the sync loop never retried a completion either, so a raised
     exception is the identical failure mode (modulo satay wrapping it in
     `TaskFailedError` — see the module docstring's "known gaps" note in the PR body).
+
+    **KAN-651:** if the provider self-reported usage on this turn (`turn.usage`,
+    see `AssistantTurn`'s docstring), record it onto THIS attempt's `TaskContext`
+    before returning — mirroring `examples/best_of_n_demo.py`'s `bill()` pattern
+    of billing as soon as the answer is in hand, before anything downstream can
+    reject it. That ordering matters here too: `satay`'s executor flushes
+    `ctx.recorded_usage` onto whichever event ends this attempt, `TaskCompleted`
+    if this call returns normally (always true here — nothing below can still
+    fail this attempt) or `TaskAttemptFailed` on a raise, so a provider call that
+    answered and was then never used for any reason is still priced honestly.
+    A provider that reports no usage (`turn.usage is None` — always true for
+    `ReplayProvider`, possibly true for a live provider) records nothing, which
+    the read side (`journal.rs`) must treat as "not available", never as zero.
     """
     rig = _rig()
-    return await asyncio.to_thread(rig.provider.complete, system, messages, tools)
+    turn = await asyncio.to_thread(rig.provider.complete, system, messages, tools)
+    if turn.usage:
+        satay.task_context().record_model_usage(**turn.usage)
+    return turn
 
 
 @satay.task()
@@ -710,15 +739,38 @@ def _clone_ctx_for_candidate(base: AgentContext, candidate_key: str) -> AgentCon
 # --- the entry points ---------------------------------------------------------------
 
 
-def _journal_transcript(run_id: str, journal_path: Path) -> dict[str, Any]:
+def _journal_transcript(
+    run_id: str,
+    journal_path: Path,
+    cost_run_ids: list[str] | None = None,
+) -> dict[str, Any]:
     """Build the `{"kind": "journal", ...}` transcript arm (ADR-0013) for `run_id`.
 
     `ref` is the journal file's basename, not a full path: `brain/src/pr/body.rs`
     already knows the shared directory (its own `SBFLOW_SATAY_JOURNAL_DIR`), so
     `ref` only needs to name *which file inside it* — not repeat the directory, and
     not leak this worker's own filesystem layout into a value a reviewer might see.
+
+    `cost_run_ids` (KAN-651) is an additive, optional key within the `journal`
+    arm — ADR-0013 explicitly leaves "the exact key names" of each arm to the
+    implementation, provided the union stays discriminated by `kind`, so this is
+    a backward-compatible widening rather than a shape change needing a fresh
+    ADR (`CLAUDE.md`'s frozen-contract entry for `transcript?` is updated in the
+    same change, per the precedent ADR-0013 itself set).
+
+    Only set for `run_repair_satay_candidates`'s N>1 path: it names *every*
+    candidate's own child run_id (including the winner), so a reader summing
+    `ctx.record_model_usage` entries across `cost_run_ids` gets the WHOLE job's
+    spend — every candidate drafted, not just the one that won the judging (see
+    `_drive_multi_candidate`'s docstring for the reasoning). Absent for N=1 and
+    for anything that predates this field: a reader must then fall back to
+    `[run_id]` — the single run whose journal actually produced the result,
+    which is the correct (and only) cost source when there was one candidate.
     """
-    return {"kind": "journal", "run_id": run_id, "ref": journal_path.name}
+    t: dict[str, Any] = {"kind": "journal", "run_id": run_id, "ref": journal_path.name}
+    if cost_run_ids:
+        t["cost_run_ids"] = cost_run_ids
+    return t
 
 
 def run_repair_satay(
@@ -791,6 +843,29 @@ async def _resolve_child_run_id(
     return parent_run_id
 
 
+async def _all_child_run_ids(store: "SQLiteStore", parent_run_id: str) -> list[str]:
+    """Every child run `_multi_candidate_workflow` started under `parent_run_id`
+    (KAN-651) — one per candidate, winner and losers alike, in the order their
+    `ChildWorkflowScheduled` events were recorded.
+
+    Reads the same public event stream `_resolve_child_run_id` reads (no reaching
+    into replay-engine internals here either), just without filtering to one
+    `key`. Used to build `cost_run_ids` — see `_journal_transcript`'s docstring
+    and `_drive_multi_candidate`'s for why the cost side deliberately does NOT
+    narrow to the winning candidate the way the reasoning-transcript `run_id`
+    does.
+    """
+    from satay.journal.events import EventType
+
+    run_ids: list[str] = []
+    for event in await store.read_events(parent_run_id):
+        if event.type is EventType.CHILD_WORKFLOW_SCHEDULED:
+            child_run_id = event.payload.get("child_run_id")
+            if isinstance(child_run_id, str) and child_run_id:
+                run_ids.append(child_run_id)
+    return run_ids
+
+
 async def _drive_multi_candidate(
     store: "SQLiteStore", payload: dict[str, Any], path: Path
 ) -> dict[str, Any]:
@@ -798,14 +873,28 @@ async def _drive_multi_candidate(
 
     Both steps run inside the same `asyncio.run(...)` call (one event loop): the
     drive itself, and the follow-up `store.read_events(...)` `_resolve_child_run_id`
-    needs, since `SQLiteStore`'s methods are coroutines and there is no live loop
-    once `asyncio.run` has returned.
+    (and, KAN-651, `_all_child_run_ids`) need, since `SQLiteStore`'s methods are
+    coroutines and there is no live loop once `asyncio.run` has returned.
+
+    **KAN-651's N-candidate cost decision:** "what did this job cost" is scoped
+    to the WHOLE job — every candidate's model calls were real spend, whether or
+    not that candidate went on to win the judging (collect mode runs every
+    candidate to completion; a losing candidate is not a candidate that never
+    ran). Reporting only the winner's cost would silently undercount actual
+    spend by up to `n_candidates - 1` candidates' worth of drafting-loop turns
+    on every N>1 job. So `cost_run_ids` names every child (`_all_child_run_ids`),
+    while `run_id` itself stays the winning candidate's own run — unchanged from
+    KAN-649 — because that is still the one run a reviewer clicking the
+    "reasoning transcript" link should land on. Cost and reasoning are two
+    different questions with two different right answers; `_journal_transcript`
+    carries both without conflating them.
     """
     handle = satay.start(_multi_candidate_workflow, payload, store=store)
     result = await handle.result()
     candidate_key = result.pop("_candidate_key", None)
     run_id = await _resolve_child_run_id(store, handle.run_id, candidate_key)
-    result["transcript"] = _journal_transcript(run_id, path)
+    cost_run_ids = await _all_child_run_ids(store, handle.run_id)
+    result["transcript"] = _journal_transcript(run_id, path, cost_run_ids=cost_run_ids)
     return result
 
 

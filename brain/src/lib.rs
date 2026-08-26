@@ -21,19 +21,38 @@ use axum::{
 };
 use sqlx::PgPool;
 
-/// Shared axum state: the DB pool plus the optional webhook HMAC secret
-/// (KAN-926). `PgPool: FromRef<AppState>` lets the existing `State<PgPool>`
-/// handlers (`web::index`, `api::*`) keep working unchanged against this
-/// wider state via axum's substate pattern.
+/// Shared axum state: the DB pool, the optional webhook HMAC secret (KAN-926),
+/// and where the worker's persisted Satay journal is mounted (KAN-651).
+/// `PgPool`/`SatayJournalDir`: `FromRef<AppState>` let the existing
+/// `State<PgPool>` handlers (`web::index`, `api::*`) keep working unchanged, and
+/// let `api::get_run` pull in just the journal dir, via axum's substate
+/// pattern.
 #[derive(Clone)]
 pub struct AppState {
     pub pool: PgPool,
     pub webhook_secret: Option<String>,
+    pub satay_journal_dir: String,
 }
 
 impl FromRef<AppState> for PgPool {
     fn from_ref(state: &AppState) -> Self {
         state.pool.clone()
+    }
+}
+
+/// KAN-651: the directory the worker's persisted Satay journal (`satay.db`,
+/// plus its sibling `blobs/` spill dir) is mounted under, read-only, in this
+/// container — the same volume `pr::PrOpenerConfig::satay_journal_dir` points
+/// the PR-opener's own journal reads at (`pr/journal.rs`). A distinct
+/// newtype (rather than a bare `String` substate) so axum's `FromRef`
+/// dispatches on type, not on accidentally matching some other `String` field
+/// `AppState` might grow later.
+#[derive(Clone)]
+pub struct SatayJournalDir(pub String);
+
+impl FromRef<AppState> for SatayJournalDir {
+    fn from_ref(state: &AppState) -> Self {
+        SatayJournalDir(state.satay_journal_dir.clone())
     }
 }
 
@@ -90,10 +109,21 @@ pub fn app(pool: PgPool) -> Router {
 
 /// Build the router with an explicit webhook HMAC secret (KAN-926). `None`
 /// keeps `POST /webhook` unauthenticated, exactly `app`'s behavior.
+///
+/// `satay_journal_dir` (KAN-651) is read directly from `SBFLOW_SATAY_JOURNAL_DIR`
+/// here, mirroring `PrOpenerConfig::from_env`'s own default — rather than
+/// threading it through `Config`/every caller of `app`/`app_with_webhook_secret`
+/// — so this function's signature (and every existing test/`main.rs` call site)
+/// stays unchanged. Harmless when the worker never ran a Satay-backed job: the
+/// file simply doesn't exist yet, and `api::get_run`/`pr::body::render_body`
+/// both already treat that as "cost not available", never a crash.
 pub fn app_with_webhook_secret(pool: PgPool, webhook_secret: Option<String>) -> Router {
+    let satay_journal_dir = std::env::var("SBFLOW_SATAY_JOURNAL_DIR")
+        .unwrap_or_else(|_| "/var/lib/sbflow/satay".to_string());
     let state = AppState {
         pool,
         webhook_secret,
+        satay_journal_dir,
     };
     Router::new()
         .route("/", get(web::index))

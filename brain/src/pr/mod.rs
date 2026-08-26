@@ -30,6 +30,11 @@ use anyhow::{Context, Result};
 use sqlx::PgPool;
 
 pub use githost::{build_host, GitHost, PrOpenerConfig, PrRef, PrRequest};
+// KAN-651: re-exported so `api::get_run` (outside this module) can read the same
+// per-run cost this module's own `body::render_body` reads for the PR body — one
+// reader, two renderers, never two independent computations of "what did this run
+// cost" that could quietly disagree.
+pub use journal::{aggregate_usage, cost_run_ids, UsageSummary};
 
 use crate::models::JobRow;
 

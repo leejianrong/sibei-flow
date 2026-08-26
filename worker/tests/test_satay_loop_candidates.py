@@ -326,6 +326,112 @@ def test_multi_candidate_all_raise_degrades_to_no_fix(tmp_path):
     _assert_journal_transcript(result["transcript"], journal_path=journal_path)
 
 
+# --- KAN-651: cost accounting — the N-candidate total-vs-winner decision -----------
+
+
+def test_n1_transcript_has_no_cost_run_ids_key(tmp_path):
+    """N=1 has exactly one run to cost, so `cost_run_ids` stays absent (KAN-651) —
+    a reader falls back to `[run_id]` on a missing key, which is already the
+    right answer when there is only one candidate. This is the regression guard
+    for "N=1 unchanged" extended to the new field.
+    """
+    result = run_repair_satay(
+        ReplayProvider(list(_GOOD_SCRIPTED)),
+        _ctx(),
+        _task(),
+        max_turns=6,
+        journal_path=tmp_path / "satay.db",
+    )
+    assert "cost_run_ids" not in result["transcript"]
+
+
+def test_multi_candidate_cost_run_ids_names_every_candidate_not_just_the_winner(
+    tmp_path,
+):
+    """KAN-651's explicit N-candidate decision: "per-run cost" for N>1 means the
+    TOTAL across every candidate drafted, not just the one that won the judging —
+    a losing candidate's model calls were real spend too. `cost_run_ids` must
+    therefore name every candidate's own child run (not only the winner's), and
+    summing `ctx.record_model_usage` entries across all of them must include the
+    LOSING candidate's usage too.
+    """
+
+    def _scripted_with_usage(usage: dict) -> list[dict]:
+        return [
+            {
+                "tool_calls": [
+                    {
+                        "name": "edit_file",
+                        "input": {
+                            "path": MODEL,
+                            "old_string": "customer_id,",
+                            "new_string": "cust_id as customer_id,",
+                        },
+                    }
+                ],
+                "usage": usage,
+            },
+            {"text": "Aliased cust_id back to customer_id."},
+        ]
+
+    factory = _keyed_factory(
+        [
+            ReplayProvider(
+                _scripted_with_usage(
+                    {"model": "m0", "input_tokens": 100, "output_tokens": 10}
+                )
+            ),
+            ReplayProvider(
+                _scripted_with_usage(
+                    {"model": "m1", "input_tokens": 200, "output_tokens": 20}
+                )
+            ),
+        ]
+    )
+    journal_path = tmp_path / "satay.db"
+    result = run_repair_satay_candidates(
+        factory,
+        _ctx(),
+        _task(),
+        max_turns=6,
+        n_candidates=2,
+        journal_path=journal_path,
+    )
+    assert result["outcome"] == "pr_proposed"
+
+    transcript = result["transcript"]
+    cost_run_ids = transcript["cost_run_ids"]
+    assert len(cost_run_ids) == 2
+    assert len(set(cost_run_ids)) == 2, "both candidates must be distinct real runs"
+    assert transcript["run_id"] in cost_run_ids, (
+        "the winner is one of the two candidates, so its own run_id must also "
+        "be one of the cost sources"
+    )
+
+    from satay.journal.store import SQLiteStore
+    from satay.journal.timeline import model_usage
+
+    async def _read_all_usage() -> list[dict]:
+        store = SQLiteStore.open(journal_path)
+        try:
+            entries: list[dict] = []
+            for run_id in cost_run_ids:
+                entries.extend(model_usage(await store.read_events(run_id)))
+            return entries
+        finally:
+            store.close()
+
+    entries = asyncio.run(_read_all_usage())
+    total_input = sum(e.get("input_tokens", 0) for e in entries)
+    total_output = sum(e.get("output_tokens", 0) for e in entries)
+    # Both candidates' usage summed — 100+200 in, 10+20 out — never just the
+    # winner's. If this regressed to winner-only cost, one of these would be
+    # short by exactly the losing candidate's contribution.
+    assert total_input == 100 + 200
+    assert total_output == 10 + 20
+    assert {e.get("model") for e in entries} == {"m0", "m1"}
+
+
 # --- infra + docker: real sandbox, differentiated confidence ------------------------
 
 WAREHOUSE_URL = os.environ.get(
