@@ -15,10 +15,22 @@ infrastructure — a stub `LlmProvider` that raises is enough — so they run un
 `make test-fast`. The confidence-ranking scenario needs the real sandbox (Docker) to
 produce a non-null, differentiated `confidence`, so it is marked `infra` and reuses
 `test_satay_loop.py`'s fixtures.
+
+KAN-649: every `RepairResult` this module produces now carries a `{"kind":"journal",
+...}` transcript pointing at a *persisted* journal (one file per test, via
+`tmp_path`), not the old hand-built `{"kind":"lines",...}`. Two independent calls with
+identical scripted inputs still get two different `run_id`s (each call mints a fresh
+run against the journal), so "byte-for-byte" comparisons below are asserted on
+everything BUT `transcript` — see `_pop_transcript`/`_assert_journal_transcript`,
+shared with `test_satay_loop.py`'s pattern. The N>1 tests additionally assert *which*
+run a winning transcript names: the winning candidate's own child run, never the
+parent fan-out workflow's run_id and never a losing candidate's — see
+`test_multi_candidate_transcript_names_the_winning_candidates_own_run`.
 """
 
 from __future__ import annotations
 
+import asyncio
 import os
 import shutil
 from pathlib import Path
@@ -84,12 +96,46 @@ class _RaisingProvider(LlmProvider):
         raise self._exc
 
 
+def _pop_transcript(result: dict) -> tuple[dict, dict | None]:
+    """Split `result` into (everything else, its `transcript`), popping the latter —
+    see the module docstring for why transcript equality is never asserted directly.
+    """
+    result = dict(result)
+    return result, result.pop("transcript", None)
+
+
+def _assert_journal_transcript(transcript: dict | None, *, journal_path: Path) -> str:
+    """Assert `transcript` is a well-formed `journal` arm resolvable against
+    `journal_path`, and return its `run_id`. Mirrors `test_satay_loop.py`'s helper
+    of the same name.
+    """
+    assert transcript is not None
+    assert transcript["kind"] == "journal"
+    run_id = transcript["run_id"]
+    assert isinstance(run_id, str) and run_id
+    assert transcript["ref"] == journal_path.name
+
+    from satay.journal.store import SQLiteStore
+
+    store = SQLiteStore.open(journal_path)
+    try:
+        events = asyncio.run(store.read_events(run_id))
+    finally:
+        store.close()
+    assert events, f"no events persisted for run {run_id!r} in {journal_path}"
+    return run_id
+
+
 # --- no-infra scenarios (no warehouse/Docker needed) --------------------------------
 
 
-def test_n1_degenerates_to_run_repair_satay():
+def test_n1_degenerates_to_run_repair_satay(tmp_path):
     """`n_candidates=1` must produce the exact same result as calling
-    `run_repair_satay` directly — the regression guard for "N=1 unchanged"."""
+    `run_repair_satay` directly — the regression guard for "N=1 unchanged" —
+    modulo `transcript.run_id` (KAN-649): each call mints its own fresh run, even
+    against the same journal file, so the two `run_id`s legitimately differ while
+    everything else (including the transcript's `kind`/`ref`) must match exactly.
+    """
     scripted = [
         {
             "tool_calls": [
@@ -106,8 +152,13 @@ def test_n1_degenerates_to_run_repair_satay():
         {"text": "Aliased cust_id back to customer_id."},
     ]
 
+    journal_path = tmp_path / "satay.db"
     direct = run_repair_satay(
-        ReplayProvider(list(scripted)), _ctx(), _task(), max_turns=6
+        ReplayProvider(list(scripted)),
+        _ctx(),
+        _task(),
+        max_turns=6,
+        journal_path=journal_path,
     )
     via_candidates = run_repair_satay_candidates(
         lambda: ReplayProvider(list(scripted)),
@@ -115,8 +166,18 @@ def test_n1_degenerates_to_run_repair_satay():
         _task(),
         max_turns=6,
         n_candidates=1,
+        journal_path=journal_path,
     )
-    assert via_candidates == direct
+
+    direct_rest, direct_transcript = _pop_transcript(direct)
+    via_rest, via_transcript = _pop_transcript(via_candidates)
+    assert via_rest == direct_rest
+    assert direct_transcript is not None and via_transcript is not None
+    assert direct_transcript["kind"] == via_transcript["kind"] == "journal"
+    assert direct_transcript["ref"] == via_transcript["ref"] == journal_path.name
+    assert direct_transcript["run_id"] != via_transcript["run_id"]
+    _assert_journal_transcript(direct_transcript, journal_path=journal_path)
+    _assert_journal_transcript(via_transcript, journal_path=journal_path)
 
 
 def test_n_candidates_less_than_one_is_rejected():
@@ -126,47 +187,123 @@ def test_n_candidates_less_than_one_is_rejected():
         )
 
 
-def test_multi_candidate_survives_a_sibling_exception():
+_GOOD_SCRIPTED = [
+    {
+        "tool_calls": [
+            {
+                "name": "edit_file",
+                "input": {
+                    "path": MODEL,
+                    "old_string": "customer_id,",
+                    "new_string": "cust_id as customer_id,",
+                },
+            }
+        ]
+    },
+    {"text": "Aliased cust_id back to customer_id."},
+]
+
+
+def test_multi_candidate_survives_a_sibling_exception(tmp_path):
     """Collect mode: one candidate's provider raises outright; the other candidate's
     real, individually-computed result still wins — the exception never sinks the run.
     """
-    good_scripted = [
-        {
-            "tool_calls": [
-                {
-                    "name": "edit_file",
-                    "input": {
-                        "path": MODEL,
-                        "old_string": "customer_id,",
-                        "new_string": "cust_id as customer_id,",
-                    },
-                }
-            ]
-        },
-        {"text": "Aliased cust_id back to customer_id."},
-    ]
-
     expected = run_repair_satay(
-        ReplayProvider(list(good_scripted)), _ctx(), _task(), max_turns=6
+        ReplayProvider(list(_GOOD_SCRIPTED)),
+        _ctx(),
+        _task(),
+        max_turns=6,
+        journal_path=tmp_path / "expected.db",
     )
     assert expected["outcome"] == "pr_proposed"  # sanity: this candidate really wins
 
     factory = _keyed_factory(
         [
-            ReplayProvider(list(good_scripted)),
+            ReplayProvider(list(_GOOD_SCRIPTED)),
             _RaisingProvider(RuntimeError("simulated model outage")),
         ]
     )
+    journal_path = tmp_path / "satay.db"
     result = run_repair_satay_candidates(
-        factory, _ctx(), _task(), max_turns=6, n_candidates=2
+        factory,
+        _ctx(),
+        _task(),
+        max_turns=6,
+        n_candidates=2,
+        journal_path=journal_path,
     )
-    assert result == expected
+
+    expected_rest, _ = _pop_transcript(expected)
+    result_rest, result_transcript = _pop_transcript(result)
+    assert result_rest == expected_rest
+    _assert_journal_transcript(result_transcript, journal_path=journal_path)
 
 
-def test_multi_candidate_all_raise_degrades_to_no_fix():
+def test_multi_candidate_transcript_names_the_winning_candidates_own_run(tmp_path):
+    """The shipped transcript's `run_id` is the WINNING candidate's own child run —
+    never the parent `_multi_candidate_workflow`'s run_id, never the losing (raised)
+    candidate's — so a reviewer clicking through lands on the run that actually
+    produced the diff (KAN-649 card's explicit ask).
+    """
+    factory = _keyed_factory(
+        [
+            ReplayProvider(list(_GOOD_SCRIPTED)),
+            _RaisingProvider(RuntimeError("simulated model outage")),
+        ]
+    )
+    journal_path = tmp_path / "satay.db"
+    result = run_repair_satay_candidates(
+        factory,
+        _ctx(),
+        _task(),
+        max_turns=6,
+        n_candidates=2,
+        journal_path=journal_path,
+    )
+    assert result["outcome"] == "pr_proposed"
+    winner_run_id = result["transcript"]["run_id"]
+
+    from satay.journal.events import RunStatus
+    from satay.journal.store import SQLiteStore
+
+    async def _inspect() -> tuple[str, dict[str, str]]:
+        store = SQLiteStore.open(journal_path)
+        try:
+            run_ids = list(await store.list_runs())
+            statuses = {
+                run_id: (await store.get_run(run_id)).status.value for run_id in run_ids
+            }
+            # `list_runs` orders oldest-first (created_at): the parent
+            # (`_multi_candidate_workflow`) is created before either child is
+            # scheduled, so it is always the first row.
+            return run_ids[0], statuses
+        finally:
+            store.close()
+
+    parent_run_id, statuses = asyncio.run(_inspect())
+
+    assert winner_run_id != parent_run_id, (
+        "transcript must name a candidate's own run, not the parent fan-out "
+        "workflow's run_id"
+    )
+    assert statuses[winner_run_id] == RunStatus.COMPLETED.value
+    # The losing (raised) candidate's own child run is also in this same journal
+    # file (collect mode records it durably rather than discarding it) — the
+    # winner must not be confused with it either.
+    losers = {
+        run_id
+        for run_id, status in statuses.items()
+        if run_id not in (parent_run_id, winner_run_id)
+    }
+    assert losers, "expected the raised candidate's own child run in the journal too"
+    assert statuses[next(iter(losers))] == RunStatus.FAILED.value
+
+
+def test_multi_candidate_all_raise_degrades_to_no_fix(tmp_path):
     """Every candidate raises: no drafted diff exists anywhere, so the run degrades
     to a `no_fix` naming the first failure — never a crash, never a fabricated
-    `pr_proposed`."""
+    `pr_proposed`. The transcript still points at a real run (the first-failing
+    candidate's own, per `_judge`'s docstring) rather than disappearing."""
     factory = _keyed_factory(
         [
             _RaisingProvider(RuntimeError("outage A")),
@@ -174,13 +311,19 @@ def test_multi_candidate_all_raise_degrades_to_no_fix():
             _RaisingProvider(RuntimeError("outage C")),
         ]
     )
+    journal_path = tmp_path / "satay.db"
     result = run_repair_satay_candidates(
-        factory, _ctx(), _task(), max_turns=6, n_candidates=3
+        factory,
+        _ctx(),
+        _task(),
+        max_turns=6,
+        n_candidates=3,
+        journal_path=journal_path,
     )
     assert result["outcome"] == "no_fix"
     assert "diff" not in result or result.get("diff") is None
-    assert result["transcript"]["kind"] == "lines"
     assert "3 candidate(s) failed" in result["explanation"]
+    _assert_journal_transcript(result["transcript"], journal_path=journal_path)
 
 
 # --- infra + docker: real sandbox, differentiated confidence ------------------------

@@ -20,6 +20,12 @@ sqlx = { version = "0.9", default-features = false, features = [
     "runtime-tokio",
     "macros",
     "postgres",
+    # KAN-649: read-only reader for the worker's persisted Satay journal
+    # (`brain/src/pr/journal.rs`) — sqlx's sqlite driver from the SAME crate
+    # rather than a second SQL crate (e.g. rusqlite). It bundles its own libsqlite3
+    # (via libsqlite3-sys's "bundled" feature, pulled in transitively), so no
+    # system libsqlite3-dev is needed in the Dockerfile.
+    "sqlite",
     "uuid",
     "chrono",
     "json",
@@ -43,3 +49,5 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 
 [dev-dependencies]
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "blocking"] }
+# KAN-649: `brain/src/pr/journal.rs`'s fixture journal lives in a throwaway temp dir.
+tempfile = "3"

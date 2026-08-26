@@ -23,13 +23,33 @@ Behind `SBFLOW_SATAY_LOOP` (default OFF, see `Config.satay_loop_enabled`):
   `satay.gather(*children, return_exceptions=True)` (collect mode, ADR-0027), and
   judges the survivors — see `_judge` below and the "Architectural choice" note.
 
-That journal is purely an execution/observability seam for this slice — it is never
-persisted, never written into `repair_jobs`, and nothing here touches the lease/claim
-loop, brain reconcile, the orphan sweep, or `LISTEN/NOTIFY` (ADR-0012's capability
-freeze). `RepairResult.transcript` keeps emitting `{"kind": "lines", ...}` (ADR-0013)
-exactly as `run_repair` does — the `journal` arm is separate follow-on work. The final
-return value is still one `RepairResult`-shaped dict, whether N is 1 or 30 — the frozen
-contract does not grow a "candidates" field.
+**KAN-649 update (ADR-0012 decision 3, ADR-0013's `journal` arm):** the journal is no
+longer purely in-memory/throwaway. Both entry points now open a *persistent*
+`SQLiteStore` at a path derived from `Config.satay_journal_dir` (default
+`/var/lib/sbflow/satay/satay.db`, one shared file for the whole worker process — see
+that field's docstring for why one file rather than one per job), and
+`RepairResult.transcript` is populated as `{"kind": "journal", "run_id": ..., "ref": ...}`
+instead of the hand-built `{"kind": "lines", ...}` this module used to build itself (via
+`lines_transcript(...)`, imported from `loop.py`). `_run_candidate`/`_verify_and_gate`
+below therefore no longer build a `transcript: list[str]` at all — the journal already
+records everything a hand-built line log used to approximate (every `_complete`/
+`_dispatch`/`_verify` call, its input/output, attempt/retry info), so a second,
+hand-maintained description of the same run is exactly the drift risk ADR-0013's
+"Context" section names. `run_id` in the emitted transcript is always the run whose
+OWN journal actually produced the shipped `RepairResult` — `handle.run_id` for N=1, and
+the *winning candidate's own child run_id* (not the parent fan-out workflow's run_id,
+never a losing candidate's) for N>1 — resolved from the parent's own
+`ChildWorkflowScheduled` events after the drive completes (see `run_repair_satay_candidates`).
+`ref` is the journal file's basename (e.g. `"satay.db"`): `brain/src/pr/body.rs` already
+knows the shared directory from its own `SBFLOW_SATAY_JOURNAL_DIR`, so `ref` only needs
+to name *which file inside it*, not repeat the directory.
+
+This still does not touch `repair_jobs`, the lease/claim loop, brain reconcile, the
+orphan sweep, or `LISTEN/NOTIFY` (ADR-0012's capability freeze) — the journal file is a
+new *artifact on disk*, not new durable state sibei-flow's own claim loop depends on;
+crash-resume still runs entirely through V5's job-level lease re-claim, unchanged. The
+final return value is still one `RepairResult`-shaped dict, whether N is 1 or 30 — the
+frozen contract does not grow a "candidates" field.
 
 **Provably a port, not a rewrite:** `run_repair_satay` must return a behaviorally
 identical `RepairResult` to `run_repair` for the same inputs — see
@@ -181,23 +201,33 @@ import asyncio
 import contextvars
 import dataclasses
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
 import satay
 
 from ..llm.base import AssistantTurn, LlmProvider, ToolCall, ToolSpec
 from .diffing import WorkingCopy
-from .loop import (
-    SYSTEM_PROMPT,
-    _TRANSCRIPT_CLIP,
-    _detect_prod_action,
-    build_initial_prompt,
-    lines_transcript,
-)
+from .loop import SYSTEM_PROMPT, _detect_prod_action, build_initial_prompt
 from .tools import TOOL_SPECS, AgentContext, dispatch
 
 if TYPE_CHECKING:
+    from satay.journal.store import SQLiteStore
+
     from ..sandbox.runner import SandboxRun
+
+#: Default persistent-journal filename inside `Config.satay_journal_dir` (KAN-649).
+#: Callers normally pass an explicit `journal_path` derived from `Config`; this is
+#: only the fallback for direct callers (tests, a REPL) that don't build one.
+_DEFAULT_JOURNAL_DIR = "/var/lib/sbflow/satay"
+JOURNAL_DB_NAME = "satay.db"
+
+
+def _default_journal_path() -> Path:
+    import os
+
+    base = os.environ.get("SBFLOW_SATAY_JOURNAL_DIR", _DEFAULT_JOURNAL_DIR)
+    return Path(base) / JOURNAL_DB_NAME
 
 
 @dataclass
@@ -339,6 +369,15 @@ async def _run_candidate(payload: dict[str, Any]) -> dict[str, Any]:
     not a `@satay.workflow` itself (a workflow calling another workflow inline, rather
     than via `start_child`, would not get its own journal — intentional here, since
     this function's only job is to be inlined into whichever workflow is driving it).
+
+    KAN-649: unlike `loop.py::run_repair`, this function builds **no** hand-written
+    `transcript: list[str]` — every `_complete`/`_dispatch`/`_verify` call this
+    function makes is already a durable call recorded on this run's own journal
+    (input, output, attempt count, timing), so a parallel hand-built log would be
+    exactly the redundant, driftable artifact ADR-0013's "Context" section describes.
+    The driving entry point (`run_repair_satay`/`run_repair_satay_candidates`) fills
+    in `RepairResult.transcript` as `{"kind": "journal", ...}` once, after the drive,
+    pointing at this run's own persisted journal.
     """
     task: dict[str, Any] = payload["task"]
     max_turns: int = payload["max_turns"]
@@ -350,7 +389,6 @@ async def _run_candidate(payload: dict[str, Any]) -> dict[str, Any]:
             "content": [{"type": "text", "text": build_initial_prompt(task)}],
         }
     ]
-    transcript: list[str] = []
     last_text = ""
     edit_attempts = 0
 
@@ -358,7 +396,6 @@ async def _run_candidate(payload: dict[str, Any]) -> dict[str, Any]:
         turn = await _complete(SYSTEM_PROMPT, messages, tools)
         if turn.text:
             last_text = turn.text
-            transcript.append(f"assistant: {turn.text}")
 
         assistant_content: list[dict[str, Any]] = []
         if turn.text:
@@ -376,15 +413,8 @@ async def _run_candidate(payload: dict[str, Any]) -> dict[str, Any]:
         for tc in turn.tool_calls:
             if tc.name == "edit_file":
                 edit_attempts += 1
-            transcript.append(f"→ {tc.name}({tc.input})")
             outcome = await _dispatch(tc)
             content, is_error = outcome["content"], outcome["is_error"]
-            clipped = (
-                content
-                if len(content) <= _TRANSCRIPT_CLIP
-                else content[:_TRANSCRIPT_CLIP] + " …[clipped]"
-            )
-            transcript.append(f"  {'ERROR' if is_error else 'result'}: {clipped}")
             results.append(
                 {
                     "type": "tool_result",
@@ -402,14 +432,9 @@ async def _run_candidate(payload: dict[str, Any]) -> dict[str, Any]:
     # synchronous call — see the module docstring.
     recommendation = _detect_prod_action(ctx, task)
     if recommendation is not None:
-        transcript.append(
-            "needs_prod_action: incremental model + non-rename drift → "
-            "recommending a prod action instead of a code fix"
-        )
         return {
             "outcome": "needs_prod_action",
             "explanation": recommendation,
-            "transcript": lines_transcript(transcript),
             "evidence": None,
         }
 
@@ -418,7 +443,6 @@ async def _run_candidate(payload: dict[str, Any]) -> dict[str, Any]:
         return {
             "outcome": "no_fix",
             "explanation": last_text or "Could not produce a confident fix.",
-            "transcript": lines_transcript(transcript),
             "evidence": None,
         }
 
@@ -429,25 +453,24 @@ async def _run_candidate(payload: dict[str, Any]) -> dict[str, Any]:
             "outcome": "pr_proposed",
             "diff": diff,
             "explanation": explanation,
-            "transcript": lines_transcript(transcript),
             "evidence": None,
             "confidence": None,
             "risk_class": None,
         }
 
-    return await _verify_and_gate(ctx, diff, explanation, transcript, edit_attempts)
+    return await _verify_and_gate(ctx, diff, explanation, edit_attempts)
 
 
 async def _verify_and_gate(
     ctx: AgentContext,
     diff: str,
     explanation: str,
-    transcript: list[str],
     edit_attempts: int,
 ) -> dict[str, Any]:
     """Durable-call port of `loop.py::_verify_and_gate` — identical logic, one line
     (the sandbox run) going through `await _verify(...)` instead of
-    `ctx.verify_current(...)` directly.
+    `ctx.verify_current(...)` directly. No `transcript` bookkeeping — see
+    `_run_candidate`'s docstring.
     """
     from ..sandbox.evidence import build_evidence
     from .diffing import changed_line_count
@@ -460,7 +483,6 @@ async def _verify_and_gate(
         run = ctx.last_run  # reuse the model's run_sandbox result (no second run)
     else:
         run = await _verify(model_select)
-        transcript.append(f"→ run_sandbox (compile gate) on '{model_select}'")
 
     evidence = build_evidence(run, ctx.working, model_path)
     files_touched = len(ctx.working.changed_paths())
@@ -479,14 +501,12 @@ async def _verify_and_gate(
     scored = score(signals)
 
     if not run.tier1.passed:
-        transcript.append("compile gate: tier-1 failed → suppressing to no_fix")
         return {
             "outcome": "no_fix",
             "explanation": (
                 explanation
                 + "\n\nThis draft did not pass tier-1 compile, so it was not proposed."
             ),
-            "transcript": lines_transcript(transcript),
             "evidence": evidence,
             "confidence": scored["confidence"],
             "risk_class": scored["risk_class"],
@@ -497,7 +517,6 @@ async def _verify_and_gate(
         "outcome": "pr_proposed",
         "diff": diff,
         "explanation": explanation,
-        "transcript": lines_transcript(transcript),
         "evidence": evidence,
         "confidence": scored["confidence"],
         "risk_class": scored["risk_class"],
@@ -556,7 +575,15 @@ async def _multi_candidate_workflow(payload: dict[str, Any]) -> dict[str, Any]:
         for key in candidate_keys
     ]
     outcomes = await satay.gather(*coros, return_exceptions=True)
-    return _judge(candidate_keys, outcomes)
+    result, winning_key = _judge(candidate_keys, outcomes)
+    # KAN-649: stash which candidate won so `run_repair_satay_candidates` (outside
+    # this workflow, after the drive) can resolve that candidate's own child
+    # `run_id` from the parent's `ChildWorkflowScheduled` events and point
+    # `RepairResult.transcript` at the run that actually produced this result —
+    # never the parent fan-out workflow's own run_id, never a losing candidate's.
+    # Popped back off before `RepairResult` is returned to the claim loop, so it
+    # never appears in the frozen contract; see that function's docstring.
+    return {**result, "_candidate_key": winning_key}
 
 
 def _score_key(result: dict[str, Any]) -> float:
@@ -565,8 +592,14 @@ def _score_key(result: dict[str, Any]) -> float:
     return confidence if confidence is not None else -1.0
 
 
-def _judge(candidate_keys: list[str], outcomes: list[Any]) -> dict[str, Any]:
+def _judge(
+    candidate_keys: list[str], outcomes: list[Any]
+) -> tuple[dict[str, Any], str]:
     """Pick one `RepairResult` out of N settled candidates (collect mode, ADR-0027).
+
+    Returns ``(result, winning_candidate_key)`` — the key is new in KAN-649, so the
+    caller can resolve which child run actually produced ``result`` (see
+    `_multi_candidate_workflow`).
 
     `outcomes[i]` (rejoined positionally by `satay.gather`, per `candidate_keys[i]`)
     is either the candidate's own `RepairResult`-shaped dict, or a
@@ -597,40 +630,43 @@ def _judge(candidate_keys: list[str], outcomes: list[Any]) -> dict[str, Any]:
        drafted diff from any candidate, so this can never legitimately become
        `pr_proposed`.
     """
-    results: list[dict[str, Any]] = []
+    results: list[tuple[str, dict[str, Any]]] = []
     exceptions: list[tuple[str, Exception]] = []
     for key, outcome in zip(candidate_keys, outcomes):
         if isinstance(outcome, Exception):
             exceptions.append((key, outcome))
         else:
-            results.append(outcome)
+            results.append((key, outcome))
 
-    proposed = [r for r in results if r.get("outcome") == "pr_proposed"]
+    proposed = [(k, r) for k, r in results if r.get("outcome") == "pr_proposed"]
     if proposed:
-        return max(proposed, key=_score_key)
+        key, result = max(proposed, key=lambda kr: _score_key(kr[1]))
+        return result, key
 
-    needs_prod = [r for r in results if r.get("outcome") == "needs_prod_action"]
+    needs_prod = [(k, r) for k, r in results if r.get("outcome") == "needs_prod_action"]
     if needs_prod:
-        return max(needs_prod, key=_score_key)
+        key, result = max(needs_prod, key=lambda kr: _score_key(kr[1]))
+        return result, key
 
-    no_fix = [r for r in results if r.get("outcome") == "no_fix"]
+    no_fix = [(k, r) for k, r in results if r.get("outcome") == "no_fix"]
     if no_fix:
-        return max(no_fix, key=_score_key)
+        key, result = max(no_fix, key=lambda kr: _score_key(kr[1]))
+        return result, key
 
     key, exc = exceptions[0]
     error_type = getattr(exc, "error_type", type(exc).__name__)
     error_message = getattr(exc, "error_message", str(exc))
+    # No candidate settled with a result at all: point the transcript at the
+    # first-failing candidate's own (failed) journal anyway, rather than at the
+    # parent — that is still the run a reviewer would open first to see why.
     return {
         "outcome": "no_fix",
         "explanation": (
             f"All {len(candidate_keys)} candidate(s) failed to run; first failure "
             f"(candidate {key!r}): {error_type}: {error_message}"
         ),
-        "transcript": lines_transcript(
-            [f"candidate {key}: unhandled {error_type}: {error_message}"]
-        ),
         "evidence": None,
-    }
+    }, key
 
 
 def _clone_ctx_for_candidate(base: AgentContext, candidate_key: str) -> AgentContext:
@@ -674,37 +710,103 @@ def _clone_ctx_for_candidate(base: AgentContext, candidate_key: str) -> AgentCon
 # --- the entry points ---------------------------------------------------------------
 
 
+def _journal_transcript(run_id: str, journal_path: Path) -> dict[str, Any]:
+    """Build the `{"kind": "journal", ...}` transcript arm (ADR-0013) for `run_id`.
+
+    `ref` is the journal file's basename, not a full path: `brain/src/pr/body.rs`
+    already knows the shared directory (its own `SBFLOW_SATAY_JOURNAL_DIR`), so
+    `ref` only needs to name *which file inside it* — not repeat the directory, and
+    not leak this worker's own filesystem layout into a value a reviewer might see.
+    """
+    return {"kind": "journal", "run_id": run_id, "ref": journal_path.name}
+
+
 def run_repair_satay(
     provider: LlmProvider,
     ctx: AgentContext,
     task: dict[str, Any],
     max_turns: int,
     tools: list[ToolSpec] | None = None,
+    journal_path: str | Path | None = None,
 ) -> dict[str, Any]:
     """Drive `_repair_workflow` for one job through Satay, synchronously.
 
     Called by `build_processor` in place of `run_repair` when
-    `Config.satay_loop_enabled` is on. Opens a private in-memory journal
-    (`SQLiteStore.open(":memory:")`) for this one job only — nothing here is
-    persisted, resumed, or shared across jobs, so this slice makes no claim about
-    crash-resume through Satay; V5's job-level lease re-claim (`claim.py`, untouched)
-    is still what owns recovery, per ADR-0012.
+    `Config.satay_loop_enabled` is on. KAN-649: opens a **persistent** journal (a
+    real file, not `":memory:"`) at `journal_path` (default derived from
+    `SBFLOW_SATAY_JOURNAL_DIR`/`Config.satay_journal_dir` — see that field's
+    docstring for why one shared file rather than one per job), so the run this call
+    drives is still readable after the call returns — by `brain/src/pr/body.rs`, or
+    by `satay runs show <run_id>` against the same file. Crash-resume is still owned
+    entirely by V5's job-level lease re-claim (`claim.py`, untouched); this file
+    existing does not change that (ADR-0012).
     """
     from satay.journal.store import SQLiteStore
 
     tools = tools or TOOL_SPECS
+    path = Path(journal_path) if journal_path is not None else _default_journal_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
     token = _RIG.set(_Rig(provider=provider, ctx=ctx))
-    store = SQLiteStore.open(":memory:")
+    store = SQLiteStore.open(path)
     try:
         handle = satay.start(
             _repair_workflow,
             {"task": task, "max_turns": max_turns, "tools": tools},
             store=store,
         )
-        return asyncio.run(handle.result())
+        result = asyncio.run(handle.result())
+        result["transcript"] = _journal_transcript(handle.run_id, path)
+        return result
     finally:
         store.close()
         _RIG.reset(token)
+
+
+async def _resolve_child_run_id(
+    store: "SQLiteStore",
+    parent_run_id: str,
+    candidate_key: str | None,
+) -> str:
+    """Find the child `run_id` `_multi_candidate_workflow` started for `candidate_key`.
+
+    Reads the parent's own `ChildWorkflowScheduled` events (public store-read API —
+    no reaching into replay-engine internals for this) and matches on the `key`
+    field `satay.start_child(..., key=candidate_key)` recorded. Falls back to the
+    parent's own `run_id` if `candidate_key` is unset or no match is found (should
+    not happen in practice — `_judge` always names a real candidate — but a
+    transcript pointing at *a* real, readable run beats crashing the whole job).
+    """
+    from satay.journal.events import EventType
+
+    if candidate_key is None:
+        return parent_run_id
+    for event in await store.read_events(parent_run_id):
+        if (
+            event.type is EventType.CHILD_WORKFLOW_SCHEDULED
+            and event.payload.get("key") == candidate_key
+        ):
+            child_run_id = event.payload.get("child_run_id")
+            if isinstance(child_run_id, str) and child_run_id:
+                return child_run_id
+    return parent_run_id
+
+
+async def _drive_multi_candidate(
+    store: "SQLiteStore", payload: dict[str, Any], path: Path
+) -> dict[str, Any]:
+    """Drive `_multi_candidate_workflow` and resolve the winning child's `run_id`.
+
+    Both steps run inside the same `asyncio.run(...)` call (one event loop): the
+    drive itself, and the follow-up `store.read_events(...)` `_resolve_child_run_id`
+    needs, since `SQLiteStore`'s methods are coroutines and there is no live loop
+    once `asyncio.run` has returned.
+    """
+    handle = satay.start(_multi_candidate_workflow, payload, store=store)
+    result = await handle.result()
+    candidate_key = result.pop("_candidate_key", None)
+    run_id = await _resolve_child_run_id(store, handle.run_id, candidate_key)
+    result["transcript"] = _journal_transcript(run_id, path)
+    return result
 
 
 def run_repair_satay_candidates(
@@ -714,6 +816,7 @@ def run_repair_satay_candidates(
     max_turns: int,
     n_candidates: int,
     tools: list[ToolSpec] | None = None,
+    journal_path: str | Path | None = None,
 ) -> dict[str, Any]:
     """Drive `n_candidates` candidates concurrently through Satay collect-mode
     fan-out (KAN-648 slice 2, ADR-0012 decision 4's actual trigger), and return one
@@ -722,24 +825,37 @@ def run_repair_satay_candidates(
     `n_candidates <= 1` degenerates to calling `run_repair_satay` directly — the exact
     same function slice 1 shipped, called with `provider_factory()`'s one instance and
     `ctx` unmodified — so N=1 is byte-identical to slice 1's behaviour, not merely
-    "produces equal output" (see `tests/test_satay_loop_candidates.py`).
+    "produces equal output" (see `tests/test_satay_loop_candidates.py`). Note that
+    "byte-identical" no longer extends to the transcript's `run_id`: every call to
+    `run_repair_satay`/`run_repair_satay_candidates` mints a fresh run against the
+    journal, so two calls with identical scripted inputs still get two different
+    (but each individually real and resolvable) `run_id`s.
 
     For N>1: builds N independent `_Rig`s — a fresh `provider_factory()` call and a
     fresh `_clone_ctx_for_candidate(ctx, key)` per candidate (see both docstrings for
     why neither the provider nor the context — including its `SandboxRunner`'s
     warehouse-side verification target — can be shared across concurrently-running
-    candidates) — publishes them
-    once, up front, on `_RIGS`, then drives `_multi_candidate_workflow` through a
-    private, throwaway, in-memory journal exactly as `run_repair_satay` does for N=1
-    (nothing here is persisted, resumed, or shared across jobs; V5's job-level lease
-    re-claim, `claim.py`, is untouched and still owns crash recovery, per ADR-0012).
-    `ctx` itself is never mutated by this path — it is only ever read, as the
-    template every candidate's own context is cloned from.
+    candidates) — publishes them once, up front, on `_RIGS`, then drives
+    `_multi_candidate_workflow` through a **persistent** journal exactly as
+    `run_repair_satay` does for N=1 (KAN-649; V5's job-level lease re-claim,
+    `claim.py`, is untouched and still owns crash recovery, per ADR-0012). `ctx`
+    itself is never mutated by this path — it is only ever read, as the template
+    every candidate's own context is cloned from.
+
+    The emitted `transcript.run_id` is the **winning candidate's own child run**
+    (its own `@satay.workflow` child, its own journal) — never the parent
+    `_multi_candidate_workflow`'s run_id, and never a losing candidate's — resolved
+    from the parent's `ChildWorkflowScheduled` events after the drive (see
+    `_resolve_child_run_id`). A reviewer clicking through the transcript link should
+    land on the run that actually produced the shipped diff, not the fan-out
+    coordinator or a candidate that lost the judging.
     """
     if n_candidates < 1:
         raise ValueError(f"n_candidates must be >= 1, got {n_candidates}")
     if n_candidates <= 1:
-        return run_repair_satay(provider_factory(), ctx, task, max_turns, tools)
+        return run_repair_satay(
+            provider_factory(), ctx, task, max_turns, tools, journal_path
+        )
 
     from satay.journal.store import SQLiteStore
 
@@ -750,19 +866,17 @@ def run_repair_satay_candidates(
         for key in candidate_keys
     }
     rigs_token = _RIGS.set(rigs)
-    store = SQLiteStore.open(":memory:")
+    path = Path(journal_path) if journal_path is not None else _default_journal_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    store = SQLiteStore.open(path)
     try:
-        handle = satay.start(
-            _multi_candidate_workflow,
-            {
-                "task": task,
-                "max_turns": max_turns,
-                "tools": tools,
-                "candidate_keys": candidate_keys,
-            },
-            store=store,
-        )
-        return asyncio.run(handle.result())
+        payload = {
+            "task": task,
+            "max_turns": max_turns,
+            "tools": tools,
+            "candidate_keys": candidate_keys,
+        }
+        return asyncio.run(_drive_multi_candidate(store, payload, path))
     finally:
         store.close()
         _RIGS.reset(rigs_token)

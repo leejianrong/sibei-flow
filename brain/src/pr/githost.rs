@@ -70,6 +70,14 @@ pub struct PrOpenerConfig {
     pub github_repo: Option<String>,
     /// github backend: API base (overridable so tests hit a mock host).
     pub github_api_base: String,
+    /// KAN-649 / ADR-0012 decision 3, ADR-0013: directory the worker's persisted
+    /// Satay journal (`satay.db`, plus its sibling `blobs/` spill dir) is mounted
+    /// under, read-only, in this container — the same path the worker's own
+    /// `SBFLOW_SATAY_JOURNAL_DIR` writes to (see `docker-compose.yml`'s shared
+    /// `satay-journal` volume). Consulted only when rendering a `RepairResult`
+    /// whose `transcript.kind == "journal"` (`pr/journal.rs`); harmless when the
+    /// worker never ran a Satay-backed job — the file simply doesn't exist yet.
+    pub satay_journal_dir: String,
 }
 
 impl PrOpenerConfig {
@@ -92,6 +100,7 @@ impl PrOpenerConfig {
             github_token: std::env::var("GITHUB_TOKEN").ok().filter(|s| !s.is_empty()),
             github_repo: std::env::var("GIT_REPO").ok().filter(|s| !s.is_empty()),
             github_api_base: env_or("GITHUB_API_URL", "https://api.github.com"),
+            satay_journal_dir: env_or("SBFLOW_SATAY_JOURNAL_DIR", "/var/lib/sbflow/satay"),
         })
     }
 }

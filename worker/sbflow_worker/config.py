@@ -57,6 +57,18 @@ class Config:
     #: single-candidate behaviour, byte-for-byte (the ADR's own example phrasing
     #: suggests 3 as a sensible value once this is turned on).
     satay_candidates: int
+    #: KAN-649 / ADR-0012 decision 3, ADR-0013: directory a *persistent* Satay
+    #: journal (`satay.db`, plus its sibling `blobs/` spill dir) lives under, when
+    #: `satay_loop_enabled` is on. One shared file for the whole worker process —
+    #: not one per job — because the store's schema is already keyed by `run_id`
+    #: (confirmed by reading `satay.journal.store`), SQLite's WAL mode handles one
+    #: writer + concurrent readers fine, and a shared file means a single docker
+    #: volume + a single env var on the brain side, rather than a naming scheme
+    #: brain would have to reconstruct per job. Mounted as a shared docker volume:
+    #: read-write here, read-only on `brain` (`SBFLOW_SATAY_JOURNAL_DIR` there too),
+    #: so `brain/src/pr/body.rs` can open the same file to render a `journal`
+    #: transcript. See `agent/satay_loop.py` for what actually gets written here.
+    satay_journal_dir: str
 
     # --- V3: tiered verification sandbox (ADR-0006, B-S2) ------------------
     #: Pre-baked sandbox image (python + dbt-core + dbt-postgres + git).
@@ -98,6 +110,9 @@ class Config:
             satay_loop_enabled=os.environ.get("SBFLOW_SATAY_LOOP", "0")
             not in ("0", "", "false"),
             satay_candidates=int(os.environ.get("SBFLOW_SATAY_CANDIDATES", "1")),
+            satay_journal_dir=os.environ.get(
+                "SBFLOW_SATAY_JOURNAL_DIR", "/var/lib/sbflow/satay"
+            ),
             sandbox_image=os.environ.get("SANDBOX_IMAGE", "sbflow-sandbox:latest"),
             sandbox_network=os.environ.get("SANDBOX_NETWORK") or None,
             sandbox_work_dir=os.environ.get("SANDBOX_WORK_DIR", "/tmp/sbflow-sandbox"),
