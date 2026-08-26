@@ -18,7 +18,11 @@ pub fn render_title(job: &JobRow) -> String {
 }
 
 /// The full Markdown PR body.
-pub fn render_body(job: &JobRow) -> String {
+///
+/// `journal_dir` is where a `transcript.kind == "journal"` arm's SQLite file is
+/// mounted (read-only) in this container — `PrOpenerConfig::satay_journal_dir`,
+/// consulted only by `render_transcript`'s `journal` arm (KAN-649).
+pub async fn render_body(job: &JobRow, journal_dir: &str) -> String {
     let result = job.result.clone().unwrap_or(Value::Null);
     let get = |k: &str| result.get(k);
 
@@ -54,7 +58,7 @@ pub fn render_body(job: &JobRow) -> String {
         get("factors"),
     ));
 
-    s.push_str(&render_transcript(get("transcript")));
+    s.push_str(&render_transcript(get("transcript"), journal_dir).await);
 
     s.push_str("---\n");
     s.push_str(
@@ -78,11 +82,15 @@ pub fn render_body(job: &JobRow) -> String {
 /// nothing rather than guessing, so a newer worker emitting a third arm degrades
 /// to a PR without a transcript instead of a PR with a mangled one.
 ///
-/// The `journal` arm is not produced by any worker yet. It arrives when the
-/// repair loop is ported onto Satay (ADR-0012, decision 4), at which point this
-/// becomes a render *of the journal* rather than of a parallel artifact that can
-/// drift from what the run actually did.
-fn render_transcript(t: Option<&Value>) -> String {
+/// The `journal` arm (KAN-649) is now a **real read of the journal**, not a
+/// parallel artifact that can drift from what the run actually did: it opens the
+/// worker's persisted Satay journal (mounted read-only at `journal_dir`, the same
+/// path the worker's `SBFLOW_SATAY_JOURNAL_DIR` writes to — see
+/// `docker-compose.yml`'s shared `satay-journal` volume) and renders that run's
+/// events. See `pr/journal.rs` for the reader and its documented known gaps
+/// (no typed reconstruction of the worker's Python types; a spilled blob is
+/// resolved by reading the sibling `blobs/` dir directly).
+async fn render_transcript(t: Option<&Value>, journal_dir: &str) -> String {
     let Some(t) = t else {
         return String::new();
     };
@@ -103,14 +111,10 @@ fn render_transcript(t: Option<&Value>) -> String {
             format!("```\n{}\n```\n", joined.trim_end())
         }
         Some("journal") => {
-            // Placeholder until the port lands: name the run so a reviewer can
-            // find it, rather than inventing a rendering of a journal we cannot
-            // read from here.
             let run_id = t.get("run_id").and_then(Value::as_str).unwrap_or("unknown");
-            format!(
-                "Recorded as Satay run `{run_id}`. Replay it locally with \
-                 `satay runs show {run_id}`.\n"
-            )
+            let journal_ref = t.get("ref").and_then(Value::as_str).unwrap_or("");
+            let rendered = super::journal::render(journal_dir, run_id, journal_ref).await;
+            format!("```\n{}\n```\n", rendered.trim_end())
         }
         _ => return String::new(),
     };
@@ -245,15 +249,20 @@ mod tests {
         }
     }
 
+    /// A `journal_dir` no test in this module expects to actually resolve — most
+    /// of these tests exercise the `lines` arm or the unknown/legacy-shape
+    /// fallbacks, none of which ever touch the filesystem, so any path is fine.
+    const NO_JOURNAL: &str = "/nonexistent-in-these-tests";
+
     #[test]
     fn title_names_class_and_node() {
         let t = render_title(&sample_job());
         assert_eq!(t, "sbflow: auto-fix schema_drift in model.analytics.orders");
     }
 
-    #[test]
-    fn body_carries_everything_the_reviewer_needs() {
-        let b = render_body(&sample_job());
+    #[tokio::test]
+    async fn body_carries_everything_the_reviewer_needs() {
+        let b = render_body(&sample_job(), NO_JOURNAL).await;
         // explanation + diff fenced as ```diff
         assert!(b.contains("Upstream renamed customer_id to cust_id"));
         assert!(b.contains("```diff"));
@@ -273,8 +282,8 @@ mod tests {
         assert!(b.contains("Rollback") && b.contains("git revert"));
     }
 
-    #[test]
-    fn evidence_discloses_unconfigured_sample() {
+    #[tokio::test]
+    async fn evidence_discloses_unconfigured_sample() {
         let mut job = sample_job();
         job.result = Some(serde_json::json!({
             "outcome": "pr_proposed",
@@ -284,55 +293,80 @@ mod tests {
                 "output_schema": {"changed": null, "detail": "undetermined"}
             }
         }));
-        let b = render_body(&job);
+        let b = render_body(&job, NO_JOURNAL).await;
         assert!(b.contains("⚠️ not configured"));
         assert!(b.contains("⚠️ undetermined"));
     }
 
     // --- RepairResult.transcript, the ADR-0013 discriminated union -----------
 
-    #[test]
-    fn transcript_lines_arm_renders_the_lines() {
+    #[tokio::test]
+    async fn transcript_lines_arm_renders_the_lines() {
         let t = serde_json::json!({"kind": "lines", "lines": ["a", "b"]});
-        let out = render_transcript(Some(&t));
+        let out = render_transcript(Some(&t), NO_JOURNAL).await;
         assert!(out.contains("🧠 Reasoning transcript"));
         assert!(out.contains("a\nb"));
     }
 
-    #[test]
-    fn transcript_journal_arm_names_the_run() {
-        // Not produced by any worker yet; it arrives with the Satay port
-        // (ADR-0012 decision 4). The brain must already handle it, because the
-        // contract widened first on purpose.
-        let t = serde_json::json!({"kind": "journal", "run_id": "a3f2", "ref": "x"});
-        let out = render_transcript(Some(&t));
+    /// KAN-649: the placeholder ("name the run, point at `satay runs show`") is
+    /// gone — the `journal` arm now opens the worker's persisted journal (mounted
+    /// at `journal_dir`) and renders its actual events. This test writes a real
+    /// fixture journal (`journal::fixtures::write_minimal_journal` — satay's exact
+    /// schema, shared with `journal.rs`'s own tests) and asserts the rendered PR
+    /// body reflects it, proving the `kind == "journal"` wiring end to end.
+    #[tokio::test]
+    async fn transcript_journal_arm_renders_the_real_journal() {
+        let dir = tempfile::tempdir().unwrap();
+        super::super::journal::fixtures::write_minimal_journal(dir.path(), "a3f2").await;
+
+        let t = serde_json::json!({"kind": "journal", "run_id": "a3f2", "ref": "satay.db"});
+        let out = render_transcript(Some(&t), dir.path().to_str().unwrap()).await;
+
         assert!(out.contains("🧠 Reasoning transcript"));
         assert!(out.contains("a3f2"));
-        assert!(out.contains("satay runs show a3f2"));
+        assert!(out.contains("WorkflowCreated"));
+        assert!(out.contains("_repair_workflow"));
+        assert!(out.contains("WorkflowCompleted"));
+        assert!(out.contains("pr_proposed"));
+        // The old placeholder text must be gone — this is a render, not a pointer.
+        assert!(!out.contains("Replay it locally"));
     }
 
-    #[test]
-    fn transcript_unknown_kind_renders_nothing_rather_than_guessing() {
+    /// The journal file legitimately may not exist yet (a fresh worker that has
+    /// never run a Satay-backed job) — this must degrade to a readable fallback
+    /// inside the collapsible block, never crash `render_body`/the PR-opener poll.
+    #[tokio::test]
+    async fn transcript_journal_arm_degrades_gracefully_when_unmounted() {
+        let dir = tempfile::tempdir().unwrap();
+        let t = serde_json::json!({"kind": "journal", "run_id": "missing-run", "ref": "satay.db"});
+        let out = render_transcript(Some(&t), dir.path().to_str().unwrap()).await;
+        assert!(out.contains("🧠 Reasoning transcript"));
+        assert!(out.contains("missing-run"));
+        assert!(out.contains("satay runs show missing-run"));
+    }
+
+    #[tokio::test]
+    async fn transcript_unknown_kind_renders_nothing_rather_than_guessing() {
         // A newer worker emitting a third arm should degrade to a PR with no
         // transcript, never a PR with a mangled one.
         let t = serde_json::json!({"kind": "something_new", "payload": [1, 2]});
-        assert_eq!(render_transcript(Some(&t)), "");
+        assert_eq!(render_transcript(Some(&t), NO_JOURNAL).await, "");
     }
 
-    #[test]
-    fn transcript_is_never_sniffed_structurally() {
+    #[tokio::test]
+    async fn transcript_is_never_sniffed_structurally() {
         // The pre-ADR-0013 shape was a bare array. Untagged input must render
         // nothing: discriminating on `kind` is the contract, and falling back to
         // structural sniffing would quietly re-admit the ambiguity the tag exists
         // to remove.
         let legacy = serde_json::json!(["assistant: hi", "→ edit_file(...)"]);
-        assert_eq!(render_transcript(Some(&legacy)), "");
-        assert_eq!(render_transcript(None), "");
+        assert_eq!(render_transcript(Some(&legacy), NO_JOURNAL).await, "");
+        assert_eq!(render_transcript(None, NO_JOURNAL).await, "");
     }
 
-    #[test]
-    fn transcript_empty_lines_render_nothing() {
+    #[tokio::test]
+    async fn transcript_empty_lines_render_nothing() {
         let t = serde_json::json!({"kind": "lines", "lines": []});
-        assert_eq!(render_transcript(Some(&t)), "");
+        assert_eq!(render_transcript(Some(&t), NO_JOURNAL).await, "");
     }
 }

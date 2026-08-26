@@ -20,6 +20,7 @@ pub mod body;
 pub mod git;
 pub mod githost;
 pub mod github;
+mod journal;
 pub mod offline;
 
 use std::sync::Arc;
@@ -153,7 +154,7 @@ async fn open_for_job(
         .to_string();
 
     let title = body::render_title(&job);
-    let body_md = body::render_body(&job);
+    let body_md = body::render_body(&job, &cfg.satay_journal_dir).await;
     let head_branch = format!(
         "{}-{}",
         cfg.branch_prefix,

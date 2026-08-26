@@ -240,6 +240,7 @@ fn pr_opener_config_carries_no_prodwrite_credential() {
         github_token: None,
         github_repo: Some("acme/analytics".into()),
         github_api_base: "https://api.github.com".into(),
+        satay_journal_dir: "/var/lib/sbflow/satay".into(),
     };
     let rendered = format!("{cfg:?}");
     for forbidden in [
@@ -280,6 +281,7 @@ fn github_without_git_repo_is_a_config_error() {
         github_token: Some("ghp_pr_scoped_only".into()),
         github_repo: None,
         github_api_base: "https://api.github.com".into(),
+        satay_journal_dir: "/var/lib/sbflow/satay".into(),
     };
     let err = match build_host(&cfg) {
         Err(e) => e,

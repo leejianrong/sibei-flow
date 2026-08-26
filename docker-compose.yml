@@ -53,8 +53,22 @@ services:
       # is enabled, since an unauthenticated /webhook can otherwise be used to
       # trigger a real PR.
       SBFLOW_WEBHOOK_SECRET: "${SBFLOW_WEBHOOK_SECRET:-}"
+      # KAN-649 / ADR-0012 decision 3, ADR-0013: where the worker's Satay journal
+      # (satay.db, plus its sibling blobs/ spill dir) lives, so a pr_proposed job's
+      # `transcript = {"kind":"journal", "run_id", "ref"}` can be rendered as a real
+      # read of the run instead of a placeholder (brain/src/pr/body.rs). Must match
+      # the worker's SBFLOW_SATAY_JOURNAL_DIR below — same shared volume, mounted
+      # read-only here (brain never writes the journal). A no-op when the worker
+      # never ran a Satay-backed job (SBFLOW_SATAY_LOOP unset) — the file simply
+      # doesn't exist yet, and render_transcript degrades to a friendly fallback.
+      SBFLOW_SATAY_JOURNAL_DIR: "${SBFLOW_SATAY_JOURNAL_DIR:-/var/lib/sbflow/satay}"
     ports:
       - "8080:8080"
+    volumes:
+      # Read-only: brain only ever reads the journal the worker writes (R6.1's
+      # read-only-elsewhere spirit — the PR opener's branch+PR push is still the
+      # only write this system performs).
+      - satay-journal:/var/lib/sbflow/satay:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -105,6 +119,15 @@ services:
       # this out to demo the honest "sample run: not configured" disclosure.
       SAMPLE_WAREHOUSE_URL: postgres://sbflow_dev:sbflow_dev@warehouse:5432/warehouse
       SAMPLE_LIMIT: "10000"
+      # Satay-workflow-shaped repair loop (KAN-648/KAN-649, ADR-0012 decision 4),
+      # default OFF (see Config.satay_loop_enabled) — left unset here so the core
+      # stack's default behaviour is byte-for-byte the pre-existing sync loop.
+      # SBFLOW_SATAY_LOOP: "1"
+      # SBFLOW_SATAY_CANDIDATES: "3"
+      # KAN-649: one shared, persistent journal file for the whole worker process
+      # (see Config.satay_journal_dir's docstring for why one file, not one per
+      # job). Must match brain's SBFLOW_SATAY_JOURNAL_DIR above — same volume.
+      SBFLOW_SATAY_JOURNAL_DIR: "${SBFLOW_SATAY_JOURNAL_DIR:-/var/lib/sbflow/satay}"
     volumes:
       # Read-only checkout the agent reads failing source from (N7).
       - ./fixtures/dbt_project:/repo:ro
@@ -113,6 +136,9 @@ services:
       # `docker run -v <hostpath>:/project` resolves on the daemon.
       - /var/run/docker.sock:/var/run/docker.sock
       - /tmp/sbflow-sandbox:/tmp/sbflow-sandbox
+      # Read-write: the only writer of the Satay journal (see brain's read-only
+      # mount of the same named volume above).
+      - satay-journal:/var/lib/sbflow/satay
     depends_on:
       postgres:
         condition: service_healthy
@@ -208,3 +234,6 @@ volumes:
   whdata:
   airflowdb:
   gitremote:
+  # KAN-649: worker (read-write) / brain (read-only) shared Satay journal —
+  # see the worker/brain service blocks above.
+  satay-journal:

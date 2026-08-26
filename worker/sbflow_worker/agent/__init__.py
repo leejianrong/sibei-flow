@@ -7,6 +7,7 @@ provider is stateful).
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Callable
 
 from ..config import Config
@@ -73,6 +74,11 @@ def build_processor(cfg: Config) -> Callable[[dict[str, Any]], dict[str, Any]]:
             # Imported lazily so the default (flag off) path never even touches
             # `satay`. See `agent/satay_loop.py` for what this does and does not
             # change.
+
+            # KAN-649: one shared, persistent journal file for the whole worker
+            # process (see Config.satay_journal_dir's docstring for why one file
+            # rather than one per job).
+            journal_path = Path(cfg.satay_journal_dir) / "satay.db"
             if cfg.satay_candidates > 1:
                 # Slice 2: N-candidate collect-mode fan-out. `provider_factory`
                 # (not a single shared `provider`) because each concurrently-run
@@ -86,11 +92,14 @@ def build_processor(cfg: Config) -> Callable[[dict[str, Any]], dict[str, Any]]:
                     task,
                     max_turns=cfg.max_turns,
                     n_candidates=cfg.satay_candidates,
+                    journal_path=journal_path,
                 )
             from .satay_loop import run_repair_satay
 
             provider = get_provider(cfg)  # fresh per job (replay is stateful)
-            return run_repair_satay(provider, ctx, task, max_turns=cfg.max_turns)
+            return run_repair_satay(
+                provider, ctx, task, max_turns=cfg.max_turns, journal_path=journal_path
+            )
         provider = get_provider(cfg)  # fresh per job (replay is stateful)
         return run_repair(provider, ctx, task, max_turns=cfg.max_turns)
 
