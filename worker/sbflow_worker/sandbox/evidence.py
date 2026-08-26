@@ -6,6 +6,9 @@ PR / dashboard renders::
     {
       "tier1": {"ran": true,  "passed": bool,       "log": str},
       "tier2": {"ran": bool,  "passed": bool|null,  "log": str},
+      "tier3": {"ran": bool,  "passed": bool|null,  "source_run_id": str|null,
+                "fork_run_id": str|null, "get_schema_ordinal": int|null,
+                "log": str},
       "output_schema": {"changed": bool|null, "detail": str}
     }
 
@@ -18,6 +21,17 @@ column set **before** vs **after** the fix. This is derived from the in-memory
 working copy (original vs edited SQL), so it is deterministic and needs no extra
 container run. A pure rename that aliases back to the old name (e.g.
 ``cust_id as customer_id``) keeps the output contract stable → ``changed: false``.
+
+**KAN-650 — tier3.** The fork-replay signal (ADR-0012's Consequences section:
+"fork the repair run at the failing call and replay a candidate fix against the
+recorded inputs... a strong [signal]", `agent/satay_loop.py`'s
+`reverify_with_fork`). Unlike tier1/tier2, tier-3 is not attempted for every
+run today (see that module's docstring for the invocation-scope decision), so
+`build_evidence` defaults it to the disclosed "not run" shape
+(`tier3_not_run`) unless a caller passes an already-computed block from
+`reverify_with_fork`'s own result (`tier3_result`/`tier3_failed`) — this keeps
+the same "disclose, don't fabricate" contract tier1/tier2 already have: the key
+is always present, and its `ran`/`passed` fields never guess.
 """
 
 from __future__ import annotations
@@ -30,7 +44,10 @@ from .runner import SandboxRun
 
 
 def build_evidence(
-    run: SandboxRun, working: WorkingCopy, model_path: str
+    run: SandboxRun,
+    working: WorkingCopy,
+    model_path: str,
+    tier3: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     changed, detail = output_schema_delta(working, model_path)
     return {
@@ -44,7 +61,62 @@ def build_evidence(
             "passed": run.tier2.passed,
             "log": run.tier2.log,
         },
+        "tier3": tier3
+        if tier3 is not None
+        else tier3_not_run("fork-replay not attempted for this run"),
         "output_schema": {"changed": changed, "detail": detail},
+    }
+
+
+# --- KAN-650: tier-3 (fork-replay) evidence builders -----------------------
+#
+# Three constructors, one disclosed shape (`ran`/`passed`/provenance/`log`),
+# mirroring tier1/tier2's own "always present, never guessed" contract:
+#
+# - `tier3_not_run(reason)` — no fork-replay was attempted (today's default
+#   for every automatically-produced RepairResult — see `satay_loop.py`).
+# - `tier3_result(...)` — a fork-replay ran and its outcome (pass/fail) is
+#   known; `passed` carries the real verdict.
+#
+# Both live here (not inline in `satay_loop.py`) so the evidence *shape* has
+# exactly one definition, matching how `tier1`/`tier2` are only ever built by
+# this module's own `build_evidence`.
+
+
+def tier3_not_run(reason: str) -> dict[str, Any]:
+    """The disclosed "no fork-replay attempted" tier-3 block."""
+    return {
+        "ran": False,
+        "passed": None,
+        "source_run_id": None,
+        "fork_run_id": None,
+        "get_schema_ordinal": None,
+        "log": reason,
+    }
+
+
+def tier3_result(
+    *,
+    passed: bool | None,
+    source_run_id: str,
+    fork_run_id: str,
+    get_schema_ordinal: int,
+    log: str,
+) -> dict[str, Any]:
+    """A completed fork-replay's tier-3 block (`agent/satay_loop.reverify_with_fork`).
+
+    ``passed`` is ``None`` when the fork ran but produced no diff to verify at
+    all (e.g. the substituted content was byte-identical to the original) —
+    disclosed as undetermined rather than guessed either way, matching
+    ``output_schema``'s own tri-state convention above.
+    """
+    return {
+        "ran": True,
+        "passed": passed,
+        "source_run_id": source_run_id,
+        "fork_run_id": fork_run_id,
+        "get_schema_ordinal": get_schema_ordinal,
+        "log": log,
     }
 
 
