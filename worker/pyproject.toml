@@ -10,7 +10,7 @@ dependencies = [
     # but installed so `claude`/`openai` are a config switch, not a rebuild).
     "anthropic>=0.122.0",
     "openai>=3.0.0",
-    "satay==0.1.0",
+    "satay==0.2.0",
 ]
 
 [project.optional-dependencies]
