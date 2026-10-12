@@ -161,8 +161,8 @@ branch (0 approvals required, so you can self-merge).
     cost_run_ids?:[str]}` (ADR-0013; `cost_run_ids` added KAN-651, additive per
     ADR-0013's "exact key names are the implementation's call" — only set for
     N>1 candidate runs, naming every candidate's own run so a cost reader sums
-    the whole job's spend, not just the winner's). The worker emits only `lines`
-    today; readers must handle both and must discriminate on `kind`, never by
+    the whole job's spend, not just the winner's). The default worker emits
+    `lines`; the opt-in Satay loop emits `journal`. Readers must handle both and must discriminate on `kind`, never by
     sniffing the structure.
   - **Agent tool contract:** `read_file(path, ref)`, `get_schema(source)`,
     `edit_file(path, old, new)`, `run_sandbox(select?)`.
