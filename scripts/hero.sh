@@ -91,7 +91,8 @@ case "$cmd" in
     say "sibei-flow is now healing it. Watch the dashboard: ${BRAIN}/"
     echo "Within ~seconds the schema-drift run should reach outcome=pr_proposed with a"
     echo "minimal customer_id -> cust_id diff + verification evidence. Poll it with:"
-    echo "  curl -s ${BRAIN}/api/runs | python3 -m json.tool"
+    echo "  curl -s -H 'Authorization: Bearer \${SBFLOW_DASHBOARD_TOKEN:-sbflow-dev-token}' ${BRAIN}/api/runs | python3 -m json.tool"
+    echo "(the dashboard asks for the same token)"
     ;;
   down)
     say "Stopping the hero stack"

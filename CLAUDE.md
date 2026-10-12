@@ -20,7 +20,9 @@ see [`README.md`](README.md) and [`docs/design/`](docs/design/) for depth
   Airflow/dbt enrollment snippets, `needs_prod_action` for incremental/non-rename
   drift, and PG/Snowflake/BigQuery classifier expansion).
 - **Shipped since v1 (M6 launch hardening, M7 Satay convergence):** HMAC webhook
-  auth via `SBFLOW_WEBHOOK_SECRET` (the `sbflow` CLI signs when it is set) and
+  auth via `SBFLOW_WEBHOOK_SECRET` (the `sbflow` CLI signs when it is set;
+  required under `GIT_HOST=github`), a bearer token on the dashboard API
+  (`SBFLOW_DASHBOARD_TOKEN`; the brain refuses a non-loopback bind without it) and
   `GIT_REPO` mandatory under `GIT_HOST=github`; the `transcript` tagged union
   (ADR-0013); and the Satay port of the repair loop, **opt-in**
   (`SBFLOW_SATAY_LOOP`, default off; `SBFLOW_SATAY_CANDIDATES` > 1 for

@@ -7,6 +7,8 @@
 set -euo pipefail
 
 BRAIN="${SBFLOW_WEBHOOK_URL:-http://localhost:8080}"
+# SIB-87: GET /api/* needs the dashboard bearer token (compose's dev default).
+AUTH="Authorization: Bearer ${SBFLOW_DASHBOARD_TOKEN:-sbflow-dev-token}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 say() { printf '\n\033[1;36m== %s ==\033[0m\n' "$1"; }
@@ -34,10 +36,10 @@ say "Give the worker a moment to claim + run the agent loop + verify in the sand
 sleep 20
 
 say "GET /api/runs  (run history)"
-curl -fsS "${BRAIN}/api/runs" | python3 -m json.tool
+curl -fsS -H "$AUTH" "${BRAIN}/api/runs" | python3 -m json.tool
 
 say "GET /api/runs/${DRIFT_ID}  (the drafted fix — diff + explanation + VERIFICATION EVIDENCE)"
-curl -fsS "${BRAIN}/api/runs/${DRIFT_ID}" | python3 -c '
+curl -fsS -H "$AUTH" "${BRAIN}/api/runs/${DRIFT_ID}" | python3 -c '
 import sys, json
 d = json.load(sys.stdin)
 r = d.get("result") or {}
@@ -53,7 +55,7 @@ print("explanation:", (r.get("explanation") or "")[:200])
 print("--- diff ---")
 print(r.get("diff") or "(none)")'
 
-say "Open the dashboard UI:  ${BRAIN}/"
+say "Open the dashboard UI:  ${BRAIN}/   (it asks for the token: ${SBFLOW_DASHBOARD_TOKEN:-sbflow-dev-token})"
 echo "Expected: the schema-drift run shows outcome=pr_proposed with a minimal"
 echo "          cust_id -> customer_id alias diff, marked VERIFIED (compiled + sample +"
 echo "          output schema unchanged) with a confidence + risk:low label; the timeout"
