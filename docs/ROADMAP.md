@@ -73,38 +73,34 @@ recommendations), one-command onboarding, and the ~90s latency mechanisms.
 - Classifier pattern expansion (Postgres/Snowflake/BigQuery drift/relation/type
   phrasings; unknown → drop preserved) (story 15, R2.3/R2.4) — *done*
 
-### M6: Launch Hardening (v1 public) — *in progress*
+### M6: Launch Hardening (v1 public) — *done*
 Getting the shipped v1 in front of people: licence clarity, landing copy, the hero
-demo recording, and the Show HN post.
-- LICENSE / open-core clarity + security once-over — *done*
-- Tighten README + GitHub Pages landing copy for launch
-- Record hero demo GIF/video (webhook → PR, ~12s)
-- Draft the Show HN post + launch checklist
+demo recording, hardening, and the Show HN post draft.
+- LICENSE / open-core clarity + security once-over (Apache-2.0) — *done*
+- Tighten README + GitHub Pages landing copy for launch — *done*
+- Record hero demo GIF/video (webhook → PR, ~12s) — *done*
+- Draft the Show HN post + launch checklist — *done* (whether it was posted is not
+  tracked here)
+- Webhook auth: HMAC-SHA256 on `POST /webhook` (`SBFLOW_WEBHOOK_SECRET`) and
+  `GIT_REPO` mandatory under `GIT_HOST=github` — *done*
+- `sbflow` CLI signs webhook POSTs when the secret is set — *done*
+- Real Airflow + dbt pipeline to validate self-healing — *done*
 
-### M7: Satay convergence — *todo*
+### M7: Satay convergence — *mostly done*
 The decision of 2026-08-05: sibei-flow and **Satay Runtime** are two independent
 products sharing one execution engine. See
 [ADR-0012](design/adr/0012-no-second-execution-engine.md),
 [ADR-0013](design/adr/0013-transcript-tagged-union.md) and
 [ADR-0014](design/adr/0014-r61-constrains-hosting.md).
-
-Pre-launch (small, and only the first one is time-sensitive):
-- `RepairResult.transcript` → tagged union `{kind:"lines"|"journal"}` (ADR-0013),
-  worker + `body.rs` + fixtures. **Do this before the Show HN**: after it, the
-  frozen contract has third-party readers and the change becomes a migration.
-
-Post-launch, in dependency order:
-- Port the repair loop onto Satay **at the multi-candidate-repair boundary** —
-  "draft three candidates, keep the best evidence". Needs Satay's collect-mode
-  fan-out (KAN-473 there). V5's lease re-claim and orphan sweep stay as they are.
-- Emit `kind:"journal"` transcripts; render the PR body from the journal.
-- Per-run cost accounting, free once the loop is a Satay workflow.
-- **Fork-and-replay as verification tier 3** — fork the repair run at the failing
-  call, replay the candidate fix against the recorded inputs. The one thing in this
-  roadmap a better-funded competitor cannot copy quickly, and the reason the port
-  is worth doing at all.
+- `RepairResult.transcript` → tagged union `{kind:"lines"|"journal"}` (ADR-0013) — *done*
+- Port the repair loop onto Satay at the multi-candidate-repair boundary, opt-in via
+  `SBFLOW_SATAY_LOOP` / `SBFLOW_SATAY_CANDIDATES` — *done*
+- Emit `kind:"journal"` transcripts; render the PR body from the journal — *done*
+- Per-run cost accounting from the journal (dashboard `usage` + PR body) — *done*
+- Fork-and-replay as verification tier 3 — *done*
 - Hosted app tier on Satay's shared plane, R6.1-preserving (ADR-0014): worker stays
-  on the customer's runner, only the redacted journal crosses.
+  on the customer's runner, only the redacted journal crosses — *todo* (deferred
+  until demand; split into receiver, PR opener, review UI, policy memory + cost)
 
 ## Ongoing (cross-cutting, no milestone)
 

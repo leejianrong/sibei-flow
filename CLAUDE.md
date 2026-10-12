@@ -19,6 +19,16 @@ see [`README.md`](README.md) and [`docs/design/`](docs/design/) for depth
   `LISTEN/NOTIFY` fast dispatch, `sbflow init` + `sbflow run -- <cmd>` CLI +
   Airflow/dbt enrollment snippets, `needs_prod_action` for incremental/non-rename
   drift, and PG/Snowflake/BigQuery classifier expansion).
+- **Shipped since v1 (M6 launch hardening, M7 Satay convergence):** HMAC webhook
+  auth via `SBFLOW_WEBHOOK_SECRET` (the `sbflow` CLI signs when it is set) and
+  `GIT_REPO` mandatory under `GIT_HOST=github`; the `transcript` tagged union
+  (ADR-0013); and the Satay port of the repair loop, **opt-in**
+  (`SBFLOW_SATAY_LOOP`, default off; `SBFLOW_SATAY_CANDIDATES` > 1 for
+  multi-candidate repair). With the port on, the persisted Satay journal feeds the
+  PR transcript, per-run cost (`usage` on `GET /api/runs/:id` and the PR body), and
+  verification **tier 3** (fork-replay against a recorded schema snapshot, an
+  optional signal in `evidence.tier3` and the scorer).
+- **Not built:** the hosted app tier (ADR-0014, KAN-652) — gated on demand.
 - **Deferred (intentional):** a multi-process warm worker pool and a long-lived
   warm sandbox container — measured hero p50 (~12s webhook→PR) is already far under
   the ~90s bar, and a persistent container would risk the ephemeral `--rm`
@@ -40,8 +50,9 @@ boundary, and they change what you are allowed to build here:
   What stays exactly as V5 shipped it: `repair_jobs`, lease/claim, `idem_key`
   dedupe, reconcile, orphan sweep, `LISTEN/NOTIFY`, PR-opener claim.
 - **[ADR-0013](docs/design/adr/0013-transcript-tagged-union.md) — the transcript
-  contract widens** to `{kind:"lines"|"journal", …}` before the v1 launch. The
-  worker keeps emitting `lines`; this only buys the option.
+  contract is widened** to `{kind:"lines"|"journal", …}` (shipped). The default
+  worker emits `lines`; the Satay-backed loop emits `journal`. Readers must branch
+  on `kind`, never sniff the shape.
 - **[ADR-0014](docs/design/adr/0014-r61-constrains-hosting.md) — R6.1 constrains
   hosting.** Hosting is not an exemption from the credential invariant. A hosted
   sibei-flow holds **no warehouse credentials of any tier** and runs **no customer
@@ -50,10 +61,10 @@ boundary, and they change what you are allowed to build here:
   invariant restated as "no prod-write credentials *in self-hosted mode*". That
   qualifier is how the invariant dies.
 
-The repair loop is **not** being ported yet. It lands when sibei-flow grows
-multi-candidate repair ("draft three, keep the best evidence"), which needs
-collect-mode fan-out that Satay is building anyway. Until then, leave the loop and
-V5's crash-recovery path alone.
+The repair loop **has been ported** onto Satay at the multi-candidate-repair
+boundary (`worker/sbflow_worker/agent/satay_loop.py`), behind `SBFLOW_SATAY_LOOP`
+(default off, so the plain `run_repair` loop is unchanged). Keep V5's crash-recovery
+path as is; do not grow engine features here (ADR-0012).
 
 ## What it is
 
