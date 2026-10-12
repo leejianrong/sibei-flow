@@ -49,9 +49,9 @@ services:
       # the offline flow keep working with zero setup — the webhook stays
       # unauthenticated exactly as before. Set this (and configure the sender
       # — Airflow/dbt enrollment or your own caller — to sign with the same
-      # secret) to require signed requests, especially whenever GIT_HOST=github
-      # is enabled, since an unauthenticated /webhook can otherwise be used to
-      # trigger a real PR.
+      # secret) to require signed requests. REQUIRED when GIT_HOST=github: the
+      # brain refuses to start without it (SIB-88), since an unauthenticated
+      # /webhook can otherwise be used to trigger a real PR.
       SBFLOW_WEBHOOK_SECRET: "${SBFLOW_WEBHOOK_SECRET:-}"
       # KAN-649 / ADR-0012 decision 3, ADR-0013: where the worker's Satay journal
       # (satay.db, plus its sibling blobs/ spill dir) lives, so a pr_proposed job's
