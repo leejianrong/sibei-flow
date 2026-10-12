@@ -349,15 +349,15 @@ it adds is "push a branch + open a PR" (ADR-0005 / ADR-0011 / R6.1).
 ### Webhook authentication (KAN-926)
 
 `POST /webhook` supports HMAC-SHA256 request signing, the same shared-secret
-pattern dbt Cloud and GitHub use for their own outbound webhooks. It's **opt-in**
-via `SBFLOW_WEBHOOK_SECRET` — unset (the default), the endpoint behaves exactly
-as before this feature landed, so `make demo` and the default offline compose
+pattern dbt Cloud and GitHub use for their own outbound webhooks. It's controlled
+by `SBFLOW_WEBHOOK_SECRET`. With the default offline git host it is **opt-in**:
+unset, the endpoint is unauthenticated, so `make demo` and the default compose
 flow need no extra setup. Set it (and configure your Airflow/dbt enrollment or
 webhook sender to sign with the same secret) whenever the endpoint is reachable
-by anyone other than a trusted network — and especially whenever `GIT_HOST=github`
-is enabled, since an unauthenticated `/webhook` could otherwise be used to steer
-a real PR at a repo/branch/diff of the caller's choosing. The brain logs a
-startup warning if `GIT_HOST=github` is set while `SBFLOW_WEBHOOK_SECRET` is not.
+by anyone other than a trusted network. With `GIT_HOST=github` it is
+**required**: the brain refuses to start without it (SIB-88), since an
+unauthenticated `/webhook` could otherwise be used to steer a real PR at a
+repo/branch/diff of the caller's choosing.
 
 ```bash
 SBFLOW_WEBHOOK_SECRET=some-shared-secret docker compose up -d brain
