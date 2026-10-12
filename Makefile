@@ -44,7 +44,7 @@ SANDBOX_WORK  := /tmp/sbflow-sandbox
 .DEFAULT_GOAL := help
 .PHONY: help up up-build build sandbox down clean ps logs logs-brain logs-worker \
         demo psql psql-warehouse test test-fast lint typecheck test-brain test-worker \
-        hero hero-break hero-down logs-airflow
+        hero hero-break hero-down logs-airflow eval
 
 help: ## List available targets
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -143,3 +143,34 @@ test-worker: sandbox ## Claim + agent-loop + sandbox tests (Python + real Docker
 	  -e SAMPLE_WAREHOUSE_URL=$(SAMPLE_URL) \
 	  -e SANDBOX_NETWORK=$(NET) -e SANDBOX_WORK_DIR=$(SANDBOX_WORK) \
 	  $(WORKER_IMG) sh -c "uv sync --extra dev && uv run pytest -q"
+
+# --- eval harness (SIB-81) ---------------------------------------------------
+# Runs every case under evals/cases/ through the real worker path (see
+# evals/README.md). Keyless by default (replay provider = a plumbing smoke test);
+# for a real-model run pass LLM_PROVIDER=claude and export ANTHROPIC_API_KEY.
+#   make eval                       all cases
+#   make eval ONLY=rename_customer_id
+#   make eval LLM_PROVIDER=claude SBFLOW_SATAY_LOOP=1 SBFLOW_SATAY_CANDIDATES=3
+EVAL_ADMIN_URL := postgres://sibei:sibei@warehouse:5432/warehouse
+eval: sandbox ## Run the eval corpus through the real repair path (see evals/README.md)
+	$(COMPOSE) build worker
+	$(COMPOSE) up -d postgres warehouse brain
+	mkdir -p evals/reports
+	docker run --rm --network $(NET) \
+	  -v "$(CURDIR)":/repo \
+	  -v $(WORKER_VENV):/repo/worker/.venv \
+	  -v /var/run/docker.sock:/var/run/docker.sock \
+	  -v $(SANDBOX_WORK):$(SANDBOX_WORK) \
+	  -w /repo/worker \
+	  -e DATABASE_URL=$(DB_URL) -e WAREHOUSE_URL=$(WH_URL) \
+	  -e SAMPLE_WAREHOUSE_URL=$(SAMPLE_URL) -e WAREHOUSE_ADMIN_URL=$(EVAL_ADMIN_URL) \
+	  -e SANDBOX_NETWORK=$(NET) -e SANDBOX_WORK_DIR=$(SANDBOX_WORK) \
+	  -e SBFLOW_BRAIN_URL=http://brain:8080 \
+	  -e LLM_PROVIDER -e LLM_MODEL -e LLM_BASE_URL -e ANTHROPIC_API_KEY -e OPENAI_API_KEY \
+	  -e SBFLOW_SATAY_LOOP -e SBFLOW_SATAY_CANDIDATES -e SBFLOW_DASHBOARD_TOKEN \
+	  -e EVAL_COMMIT=$$(git rev-parse --short HEAD 2>/dev/null) \
+	  -e HOST_UID=$$(id -u) \
+	  $(WORKER_IMG) sh -c "uv sync --extra dev && \
+	    uv run python -m sbflow_worker.evalkit --out /repo/evals/reports/report.json \
+	      $(foreach c,$(ONLY),--only $(c)); \
+	    rc=\$$?; chown -R \$$HOST_UID /repo/evals/reports 2>/dev/null; exit \$$rc"

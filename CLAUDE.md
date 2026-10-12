@@ -93,6 +93,7 @@ make test-worker   # worker claim + agent-loop + REAL sandbox tests (needs Docke
 make test-fast     # FAST no-infra lane: worker `-m "not infra"` (no DB/WH/Docker)
 make lint          # ruff check (worker)
 make typecheck     # mypy (worker) — BLOCKING (type-checks clean; fails on any error)
+make eval          # run evals/cases/ through the real repair path (see evals/README.md)
 make down / clean  # stop the stack (clean also drops volumes)
 make logs          # tail all services · logs-brain / logs-worker for one
 ```

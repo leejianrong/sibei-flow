@@ -1,0 +1,16 @@
+{
+  "id": "control_statement_timeout",
+  "description": "Control: a statement timeout is an infrastructure/performance failure, not schema drift or a SQL bug. The brain must drop it as out_of_scope and never dispatch it.",
+  "failure": {
+    "repo": "acme/analytics",
+    "run_id": "eval__control_statement_timeout",
+    "task_id": "dbt_build_big_agg",
+    "node_uid": "model.analytics.big_agg",
+    "error_text": "canceling statement due to statement timeout",
+    "adapter": "postgres",
+    "source": "dbt"
+  },
+  "expect": {
+    "outcome": "out_of_scope"
+  }
+}

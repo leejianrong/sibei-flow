@@ -154,6 +154,10 @@ GET /  ·  GET /api/runs  ·  GET /api/runs/:id     read-only dashboard (no writ
 - No LLM key needed for the demo/tests — the `replay` provider drives them. To
   run against a real model, set `LLM_PROVIDER=claude` + `ANTHROPIC_API_KEY`
   (or `LLM_PROVIDER=openai` + `LLM_BASE_URL` for a local model).
+- **Measuring repair quality:** `make eval` runs the cases under
+  [`evals/`](evals/README.md) through the real repair path and reports fix rate,
+  false-fix rate and latency. The default replay provider only smoke-tests the
+  plumbing; pass `LLM_PROVIDER=claude` for numbers that mean something.
 
 ## Onboarding & the `sbflow` CLI
 

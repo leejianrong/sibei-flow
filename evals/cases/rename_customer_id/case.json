@@ -1,0 +1,19 @@
+{
+  "id": "rename_customer_id",
+  "description": "Flagship: raw_customers.customer_id renamed to cust_id upstream; the orders model still selects customer_id. A clean 1:1 rename, fixable by aliasing.",
+  "failure": {
+    "repo": "acme/analytics",
+    "run_id": "eval__rename_customer_id",
+    "task_id": "dbt_build_orders",
+    "node_uid": "model.analytics.orders",
+    "error_text": "Database Error in model orders (models/marts/orders.sql)\n  column \"customer_id\" does not exist\n  LINE 12:   select customer_id, order_ts, amount",
+    "adapter": "postgres",
+    "source": "airflow"
+  },
+  "expect": {
+    "outcome": "pr_proposed",
+    "diff_contains": ["cust_id"]
+  },
+  "project": "../../../fixtures/dbt_project",
+  "replay": "../../../worker/sbflow_worker/replays/rename_drift.json"
+}

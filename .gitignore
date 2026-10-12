@@ -29,3 +29,6 @@ __pycache__/
 
 # Lockfiles (worker/uv.lock, brain/Cargo.lock) are intentionally committed for
 # reproducible builds — do not ignore them.
+
+# Eval run reports (SIB-81); commit a report you want to keep under docs/eval/
+evals/reports/
