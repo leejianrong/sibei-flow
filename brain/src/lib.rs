@@ -7,6 +7,7 @@
 //! Requests via a pluggable git-host backend (see `pr`).
 
 pub mod api;
+pub mod auth;
 pub mod classify;
 pub mod config;
 pub mod models;
@@ -16,6 +17,7 @@ pub mod webhook;
 
 use axum::{
     extract::FromRef,
+    middleware,
     routing::{get, post},
     Router,
 };
@@ -31,6 +33,8 @@ use sqlx::PgPool;
 pub struct AppState {
     pub pool: PgPool,
     pub webhook_secret: Option<String>,
+    /// Bearer token required on `/api/*` when set (SIB-87).
+    pub dashboard_token: Option<String>,
     pub satay_journal_dir: String,
 }
 
@@ -118,19 +122,39 @@ pub fn app(pool: PgPool) -> Router {
 /// file simply doesn't exist yet, and `api::get_run`/`pr::body::render_body`
 /// both already treat that as "cost not available", never a crash.
 pub fn app_with_webhook_secret(pool: PgPool, webhook_secret: Option<String>) -> Router {
+    app_with_auth(pool, webhook_secret, None)
+}
+
+/// Build the router with both the webhook HMAC secret (KAN-926) and the
+/// dashboard bearer token (SIB-87). `dashboard_token: None` leaves `/api/*`
+/// open, exactly `app_with_webhook_secret`'s behavior.
+pub fn app_with_auth(
+    pool: PgPool,
+    webhook_secret: Option<String>,
+    dashboard_token: Option<String>,
+) -> Router {
     let satay_journal_dir = std::env::var("SBFLOW_SATAY_JOURNAL_DIR")
         .unwrap_or_else(|_| "/var/lib/sbflow/satay".to_string());
     let state = AppState {
         pool,
         webhook_secret,
+        dashboard_token,
         satay_journal_dir,
     };
+    // `/api/*` carries the run data, so it sits behind the bearer-token gate;
+    // `/` (static shell, no data) and `/healthz` stay open (see `auth`).
+    let api_routes = Router::new()
+        .route("/api/runs", get(api::list_runs))
+        .route("/api/runs/{id}", get(api::get_run))
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            auth::require_dashboard_token,
+        ));
     Router::new()
         .route("/", get(web::index))
         .route("/healthz", get(healthz))
         .route("/webhook", post(webhook::receive))
-        .route("/api/runs", get(api::list_runs))
-        .route("/api/runs/{id}", get(api::get_run))
+        .merge(api_routes)
         .with_state(state)
 }
 

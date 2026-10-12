@@ -50,6 +50,8 @@ WH_ADMIN_URL = os.environ.get(
     "WAREHOUSE_ADMIN_URL", "postgres://sibei:sibei@warehouse:5432/warehouse"
 )
 BRAIN_URL = os.environ.get("SBFLOW_BRAIN_URL", "http://brain:8080")
+# SIB-87: GET /api/* needs the dashboard bearer token (compose's dev default).
+BRAIN_TOKEN = os.environ.get("SBFLOW_DASHBOARD_TOKEN", "sbflow-dev-token")
 
 _HERE = os.path.dirname(__file__)
 _ROOT = os.path.abspath(os.path.join(_HERE, "..", ".."))
@@ -96,7 +98,11 @@ def _post_failure(payload: dict) -> str:
 
 
 def _get_run(run_id: str) -> dict:
-    with urllib.request.urlopen(f"{BRAIN_URL}/api/runs/{run_id}", timeout=5) as resp:
+    req = urllib.request.Request(
+        f"{BRAIN_URL}/api/runs/{run_id}",
+        headers={"Authorization": f"Bearer {BRAIN_TOKEN}"},
+    )
+    with urllib.request.urlopen(req, timeout=5) as resp:
         return json.loads(resp.read())
 
 

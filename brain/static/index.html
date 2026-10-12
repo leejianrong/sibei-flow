@@ -199,8 +199,36 @@
       }).join("\n");
     }
 
+    // SIB-87: /api/* needs `Authorization: Bearer <SBFLOW_DASHBOARD_TOKEN>`. The
+    // page itself carries no run data and loads without a token; on a 401 it asks
+    // for the token once and keeps it in sessionStorage (cleared with the tab).
+    function savedToken() {
+      try { return sessionStorage.getItem("sbflow_token") || ""; } catch (e) { return ""; }
+    }
+    async function apiFetch(path) {
+      const send = () => {
+        const t = savedToken();
+        return fetch(path, t ? { headers: { Authorization: "Bearer " + t } } : {});
+      };
+      let r = await send();
+      if (r.status === 401) {
+        const t = window.prompt("This dashboard needs an access token (SBFLOW_DASHBOARD_TOKEN):");
+        if (t) {
+          try { sessionStorage.setItem("sbflow_token", t.trim()); } catch (e) { /* private mode */ }
+          r = await send();
+        }
+      }
+      if (r.status === 401) {
+        try { sessionStorage.removeItem("sbflow_token"); } catch (e) { /* ignore */ }
+        app.innerHTML = `<p class="empty">Access token required or invalid. Reload to try again.</p>`;
+        return null;
+      }
+      return r;
+    }
+
     async function routeList() {
-      const r = await fetch("/api/runs");
+      const r = await apiFetch("/api/runs");
+      if (!r) return;
       const { runs } = await r.json();
       if (!runs.length) { app.innerHTML = `<p class="empty">No runs yet. POST a failure to <code>/webhook</code>.</p>`; return; }
       const rows = runs.map(x => `
@@ -223,7 +251,8 @@
     }
 
     async function routeDetail(id) {
-      const r = await fetch("/api/runs/" + id);
+      const r = await apiFetch("/api/runs/" + id);
+      if (!r) return;
       if (!r.ok) { app.innerHTML = `<a class="back" href="#/">← back</a><p class="empty">Run not found.</p>`; return; }
       const d = await r.json();
       const res = d.result || {};

@@ -26,6 +26,11 @@ services:
     environment:
       DATABASE_URL: postgres://sibei:sibei@postgres:5432/sibei
       BIND_ADDR: 0.0.0.0:8080
+      # SIB-87: bearer token for GET /api/* (the dashboard page prompts for it).
+      # The brain refuses to bind 0.0.0.0 without one. The default below is a
+      # PUBLICLY KNOWN dev value so `make demo` works out of the box — set
+      # SBFLOW_DASHBOARD_TOKEN to a real secret before exposing the port.
+      SBFLOW_DASHBOARD_TOKEN: "${SBFLOW_DASHBOARD_TOKEN:-sbflow-dev-token}"
       RUST_LOG: info,brain=info,sqlx=warn
       # V4 PR opener (ADR-0011). Default backend = offline: push the fix branch
       # to the bundled bare git remote and record branch + compare as the "PR".

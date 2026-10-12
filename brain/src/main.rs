@@ -28,6 +28,21 @@ async fn main() -> anyhow::Result<()> {
     )
     .map_err(anyhow::Error::msg)?;
 
+    // SIB-87: same idea for the read API — never serve run data on an exposed
+    // address with no token unless the operator explicitly opted out.
+    brain::config::require_dashboard_auth(
+        &cfg.bind_addr,
+        cfg.dashboard_token.is_some(),
+        cfg.allow_insecure_dashboard,
+    )
+    .map_err(anyhow::Error::msg)?;
+    if cfg.dashboard_token.is_none() && cfg.allow_insecure_dashboard {
+        tracing::warn!(
+            "SBFLOW_ALLOW_INSECURE_DASHBOARD is set and SBFLOW_DASHBOARD_TOKEN is not: \
+             GET /api/* is unauthenticated"
+        );
+    }
+
     // Retry the initial connection — in `docker compose up` Postgres may still
     // be coming up when the brain starts.
     let pool = connect_with_retry(&cfg.database_url).await?;
@@ -64,7 +79,7 @@ async fn main() -> anyhow::Result<()> {
 
     axum::serve(
         listener,
-        brain::app_with_webhook_secret(pool, cfg.webhook_secret),
+        brain::app_with_auth(pool, cfg.webhook_secret, cfg.dashboard_token),
     )
     .await
     .context("serving")?;

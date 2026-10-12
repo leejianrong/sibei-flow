@@ -39,6 +39,7 @@ to roll back.
 make up      # bring up the whole stack (first build compiles the Rust brain — a few min)
 make demo    # drive it end to end: POST a schema-drift failure → drafted → verified fix
 open http://localhost:8080/   # read-only dashboard: the diff, evidence, confidence/risk
+                              # (asks for a token: `sbflow-dev-token` by default, see below)
 ```
 
 No API key needed — the demo and tests run on the keyless `replay` LLM provider
@@ -94,7 +95,8 @@ POST /webhook ─▶ brain (Rust, axum+sqlx)
      (N14, V4)          └─ git host (offline│github): clone → branch → apply diff → commit → push
                              → open PR w/ rendered body → record pr_url on the job  ← ONLY write action
 
-GET /  ·  GET /api/runs  ·  GET /api/runs/:id     read-only dashboard (no write actions; links the PR)
+GET /  ·  GET /api/runs  ·  GET /api/runs/:id     read-only dashboard (no write actions; links the PR;
+                                                  /api/* needs a bearer token, see "Dashboard authentication")
 ```
 
 - **brain/** — Rust: webhook receiver, thin classifier, enqueue, dashboard read
@@ -243,9 +245,29 @@ curl -s -X POST http://localhost:8080/webhook \
 curl -s -X POST http://localhost:8080/webhook \
   -H 'content-type: application/json' --data @fixtures/timeout_failure.json
 
-curl -s http://localhost:8080/api/runs | python3 -m json.tool
+AUTH="Authorization: Bearer ${SBFLOW_DASHBOARD_TOKEN:-sbflow-dev-token}"
+curl -s -H "$AUTH" http://localhost:8080/api/runs | python3 -m json.tool
 # then open a run's detail, e.g.:
-curl -s http://localhost:8080/api/runs/<id> | python3 -m json.tool
+curl -s -H "$AUTH" http://localhost:8080/api/runs/<id> | python3 -m json.tool
+```
+
+### Dashboard authentication (SIB-87)
+
+`GET /api/runs` and `GET /api/runs/:id` return diffs, evidence, transcripts and
+cost, so they require `Authorization: Bearer <SBFLOW_DASHBOARD_TOKEN>`. The page
+at `/` is a static shell with no run data, so it loads without a token and asks
+for one (kept in `sessionStorage`) before it calls the API; `/healthz` stays open,
+and `POST /webhook` keeps its own HMAC scheme (above).
+
+- The brain **refuses to start** on a non-loopback `BIND_ADDR` (the default is
+  `0.0.0.0:8080`) with no token. Bind `127.0.0.1`, set the token, or — for
+  throwaway dev only — set `SBFLOW_ALLOW_INSECURE_DASHBOARD=1`.
+- `docker-compose.yml` defaults the token to the **publicly known**
+  `sbflow-dev-token` so `make demo` works out of the box. Set
+  `SBFLOW_DASHBOARD_TOKEN` to a real secret before exposing the port.
+
+```bash
+SBFLOW_DASHBOARD_TOKEN="$(openssl rand -hex 24)" docker compose up -d brain
 ```
 
 **Expected:** the schema-drift run ends `outcome=pr_proposed` with a minimal
