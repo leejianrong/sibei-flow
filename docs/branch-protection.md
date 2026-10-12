@@ -19,6 +19,11 @@ a typo silently means "no check required". The three jobs are:
 
 If Track A renames a job, update the JSON body and the Settings UI to match.
 
+> **Pending human step (SIB-52):** CI now has a fourth job, `web` (Svelte/Vite/
+> TypeScript frontend). It runs on every PR but is **not yet a required check**;
+> add `web` to `contexts` (and the Settings UI) once it has been green for a few
+> PRs. Until then a red `web` job will not block `gh pr merge --auto`, so look at it.
+
 ## Option A — `gh` CLI (recommended)
 
 Repo is `leejianrong/sibei-flow`. The `-X PUT …/branches/main/protection`

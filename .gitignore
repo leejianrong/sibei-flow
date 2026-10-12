@@ -32,3 +32,7 @@ __pycache__/
 
 # Eval run reports (SIB-81); commit a report you want to keep under docs/eval/
 evals/reports/
+
+# Frontend (web/): dependencies and the build output
+web/node_modules/
+web/dist/

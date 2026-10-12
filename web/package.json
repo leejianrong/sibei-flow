@@ -1,0 +1,33 @@
+{
+  "name": "sibei-flow-web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "sibei-flow dashboard frontend (Svelte 5 + Vite + TypeScript). Builds to ONE self-contained index.html the Rust brain can include_str!.",
+  "engines": {
+    "node": "^22.22.2 || ^24.15.0 || >=26.0.0"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build && node scripts/check-dist.mjs",
+    "preview": "vite preview",
+    "lint": "eslint .",
+    "typecheck": "svelte-check --tsconfig ./tsconfig.json",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@sveltejs/vite-plugin-svelte": "7.3.1",
+    "@testing-library/svelte": "5.4.2",
+    "eslint": "10.12.0",
+    "eslint-plugin-svelte": "3.23.1",
+    "globals": "17.13.0",
+    "jsdom": "30.1.2",
+    "svelte": "5.57.2",
+    "svelte-check": "4.7.6",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.71.1",
+    "vite": "8.3.4",
+    "vitest": "5.0.4"
+  }
+}

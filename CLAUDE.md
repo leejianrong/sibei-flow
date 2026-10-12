@@ -94,6 +94,7 @@ make test-fast     # FAST no-infra lane: worker `-m "not infra"` (no DB/WH/Docke
 make lint          # ruff check (worker)
 make typecheck     # mypy (worker) — BLOCKING (type-checks clean; fails on any error)
 make eval          # run evals/cases/ through the real repair path (see evals/README.md)
+make web-lint web-typecheck web-test web-build   # Svelte/Vite/TS frontend in web/ (also run by lint/typecheck/test-fast)
 make down / clean  # stop the stack (clean also drops volumes)
 make logs          # tail all services · logs-brain / logs-worker for one
 ```
