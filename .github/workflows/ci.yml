@@ -245,3 +245,40 @@ jobs:
         uses: gitleaks/gitleaks-action@v3
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # --- web (Svelte + Vite + TypeScript) ------------------------------------
+  # eslint + svelte-check + vitest + the single-file build check. Node comes
+  # from web/.nvmrc so CI and local agree. `npm audit` is advisory, like the
+  # cargo/pip audits above.
+  web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: web/.nvmrc
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: npm ci
+        run: npm ci
+
+      - name: eslint
+        run: npm run lint
+
+      - name: svelte-check (TypeScript)
+        run: npm run typecheck
+
+      - name: vitest
+        run: npm test
+
+      - name: build (one self-contained index.html)
+        run: npm run build
+
+      - name: npm audit (advisory)
+        continue-on-error: true
+        run: npm audit

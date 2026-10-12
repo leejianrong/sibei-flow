@@ -44,7 +44,15 @@ SANDBOX_WORK  := /tmp/sbflow-sandbox
 .DEFAULT_GOAL := help
 .PHONY: help up up-build build sandbox down clean ps logs logs-brain logs-worker \
         demo psql psql-warehouse test test-fast lint typecheck test-brain test-worker \
-        hero hero-break hero-down logs-airflow eval
+        hero hero-break hero-down logs-airflow eval \
+        web-lint web-typecheck web-test web-build
+
+# Frontend (web/, Svelte + Vite + TypeScript). The web-* checks run from the
+# existing lint / typecheck / test-fast gates (so the pre-push hook covers them)
+# but are skipped, with a message, when npm is not installed, so a Python-only
+# contributor is not blocked. CI always runs them (the `web` job).
+HAVE_NPM := $(shell command -v npm 2>/dev/null)
+WEB_SKIP  = @echo "skipping web: npm not found (install Node, see web/.nvmrc)"
 
 help: ## List available targets
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -110,14 +118,34 @@ test: test-brain test-worker ## Run both test suites
 # The fast, no-infra lane: the pure-logic worker tests (diff guard + score
 # rubric). No Postgres/warehouse/Docker, so it runs pytest directly against a
 # local uv env — the pre-push gate. `-m "not infra"` deselects the infra layer.
-test-fast: ## Fast pre-push gate: no-infra worker tests (no DB/warehouse/Docker)
+test-fast: ## Fast pre-push gate: no-infra worker tests + web unit tests
 	cd worker && uv sync --extra dev && uv run pytest -m "not infra"
+	$(if $(HAVE_NPM),$(MAKE) web-test,$(WEB_SKIP))
 
-lint: ## Lint the worker (ruff) — non-mutating check
+lint: ## Lint the worker (ruff) and the web UI (eslint) — non-mutating check
 	cd worker && uvx ruff@0.8.4 check .
+	$(if $(HAVE_NPM),$(MAKE) web-lint,$(WEB_SKIP))
 
-typecheck: ## Type-check the worker (mypy) — BLOCKING (fails on any error)
+typecheck: ## Type-check the worker (mypy) and the web UI (svelte-check) — BLOCKING
 	cd worker && uv run --with mypy mypy sbflow_worker
+	$(if $(HAVE_NPM),$(MAKE) web-typecheck,$(WEB_SKIP))
+
+# Install web deps from the lockfile only when missing or the lockfile changed.
+web/node_modules: web/package-lock.json
+	cd web && npm ci
+	@touch web/node_modules
+
+web-lint: web/node_modules ## ESLint the web UI
+	cd web && npm run lint
+
+web-typecheck: web/node_modules ## svelte-check the web UI
+	cd web && npm run typecheck
+
+web-test: web/node_modules ## Vitest unit tests for the web UI
+	cd web && npm test
+
+web-build: web/node_modules ## Build the web UI to one self-contained dist/index.html
+	cd web && npm run build
 
 test-brain: ## Seam-2 + unit tests (Rust, throwaway DB per test)
 	$(COMPOSE) up -d postgres
